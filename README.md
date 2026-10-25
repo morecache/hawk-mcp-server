@@ -139,6 +139,13 @@ Semantics worth knowing, all verified against crmsh on a live cluster:
   a hint that names the container.
 * `resources_list` reports the containing `group` as well as `clone`, and
   group members are included in the list instead of silently missing.
+* Remote nodes (pacemaker remote) are ordinary resources from the API's point of
+  view: create a primitive of agent `ocf:pacemaker:remote` with
+  `params: {server: <host>}`. Its resource id (or its `remote-node` meta
+  attribute) is the node name; `nodes_list` reports it with `type=remote` and
+  location constraints may target it. The remote host itself must run
+  `pacemaker_remoted` with the same `/etc/pacemaker/authkey` as the cluster -
+  that setup is outside this API, which only runs cluster-level commands.
 * A `rsc_ticket` constraint makes a resource depend on a ticket (`ticket`, with
   optional `role` and `loss_policy` stop/demote/fence/freeze). The resource only
   runs while the ticket is granted to this site, so creating one against an
@@ -265,9 +272,9 @@ curl -sS -X POST http://127.0.0.1:9000/mcp \
   API offers"; the other state-changing tools describe their effect individually
   (stopping a resource, moving resources off a node, freezing a node's resources,
   and so on). Mention the intent to the user before calling any of them.
-* **Not exposed yet:** remote and bundle resources, ticket constraints, rule
-  expressions (time/date-based constraints), and the textual `crm history`
-  report (the API exposes the recorded operations themselves, not the narrative).
+* **Not exposed yet:** bundle resources (containers). Constraints are create-only,
+  so changing one means delete and recreate; there is no dedicated constraint
+  delete tool either (`resource_delete` handles any CIB object id).
 * Resource parameters are passed to crmsh as a single argv token, so values
   containing double quotes or line breaks are rejected rather than escaped.
 * In stdio mode, route the library's stdout chatter away (`./hawk-mcp-server ...

@@ -125,6 +125,11 @@ paths:
         (member or remote), plus the node attributes and utilization values
         stored in the CIB.
 
+        Remote nodes (type=remote) are included: they exist through an
+        ocf:pacemaker:remote resource, can run resources like members and are
+        valid location targets, but they are not fenced and do not count towards
+        quorum.
+
         Use this when you need node attributes (for example to check node
         labels or capacity values) rather than just liveness.
 
@@ -1223,7 +1228,7 @@ paths:
         already_exists. A constraint target must be a top-level primitive, a group
         or a clone; a resource inside a group cannot carry a constraint directly
         because crmsh would treat it as ambiguous, so target the group instead.
-        Location targets must be known cluster nodes.
+        Location targets must be cluster members or connected remote nodes.
         A location may carry a "rule" instead of node/score: a pacemaker condition
         with attribute expressions (#uname, #kind, node attributes), a recurring
         date_spec window (hours, weekdays, months, ...) or an absolute in_range
@@ -1231,6 +1236,11 @@ paths:
         "score", or takes the score from score_attribute. Rules may nest up to
         three levels, are location-only, must not be combined with node/score, and
         are written through cibadmin because crmsh cannot express dates or nesting.
+        For a location constraint, "node" must be a cluster member or a connected
+        remote node (nodes_list reports remote nodes with type=remote). The remote
+        node comes from a resource of agent ocf:pacemaker:remote: its resource id
+        (or its remote-node meta attribute) is the node name to use here.
+
         A ticket constraint (type rsc_ticket, with "ticket" and optional "role" and
         "loss_policy") makes a resource depend on a cluster-wide ticket: the
         resource may only run while the ticket is granted to this site, and losing
