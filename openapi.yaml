@@ -1142,8 +1142,10 @@ paths:
       summary: List clones
       description: |
         Returns every clone with the resource (or group) it wraps and its meta
-        attributes. Clones are also visible on the wrapped resources through the
-        "clone" field of resources_list.
+        attributes. Legacy promotable clones stored as <master> are reported the
+        same way, with the master id in place of the clone id. Clones are also
+        visible on the wrapped resources through the "clone" field of
+        resources_list.
       responses:
         '200':
           description: Clone list
