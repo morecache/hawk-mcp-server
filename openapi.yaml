@@ -1181,12 +1181,13 @@ paths:
     get:
       operationId: resource_constraints_list
       tags: [config]
-      summary: List location, colocation and order constraints
+      summary: List location, colocation, order and ticket constraints
       description: |
         Returns every constraint with its type and attributes. Location constraints
         report resource, node and score; colocation constraints report resource,
         with_resource and score; order constraints report first, then, their
-        actions and the kind. Use it to verify constraint creation and to see what
+        actions and the kind; ticket constraints report resource, ticket,
+        loss_policy and role. Use it to verify constraint creation and to see what
         has to be removed before moving resources.
       responses:
         '200':
@@ -1202,17 +1203,18 @@ paths:
     post:
       operationId: resource_constraint_create
       tags: [config]
-      summary: Create a location, colocation or order constraint
+      summary: Create a location, colocation, order or rsc_ticket constraint
       description: |
         Creates one constraint:
 
           location    crm configure location <id> <resource> <score>: <node>
           colocation  crm configure colocation <id> <score>: <resource> <with_resource>
           order       crm configure order <id> [<kind>:] <first> <then>
+          rsc_ticket  crm configure rsc_ticket <id> <ticket>: <resource>[:<role>] [loss-policy=<loss-policy>]
 
         "type" selects the form and the required fields follow from it: location
         needs resource and node, colocation needs resource and with_resource, order
-        needs first and then. "kind" is only used by order and must be Mandatory,
+        needs first and then, rsc_ticket needs resource and ticket. "kind" is only used by order and must be Mandatory,
         Optional or Serialize (default Mandatory). "score" defaults to 100 when omitted; an explicit 0 is passed through unchanged (for location, 0 means no preference; a rule with score -inf forbids a node).
 
         Constraints are create-only: an existing id is answered with 409
@@ -1227,6 +1229,13 @@ paths:
         when it matches. Rules are only supported on location constraints, node and
         score must not be combined with a rule, and the rule is written through
         cibadmin because crmsh has no grammar for date expressions.
+        A ticket constraint (type rsc_ticket, with "ticket" and optional "role" and
+        "loss_policy") makes a resource depend on a cluster-wide ticket: the
+        resource may only run while the ticket is granted to this site, and losing
+        the ticket applies the loss policy (stop, demote, fence or freeze; the
+        default is stop, or demote for promotable resources). Creating one against
+        a ticket that is not granted therefore stops the resource - grant the ticket
+        with crm_ticket first, or expect the resource to stop.
 
         Requires {"confirm": true}; add {"dry_run": true} to preview.
       requestBody:
@@ -1246,6 +1255,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
         '500':
@@ -2080,7 +2091,7 @@ components:
           type: string
         type:
           type: string
-          description: location, colocation or order
+          description: location, colocation, order or rsc_ticket
         resource:
           type: string
           description: subject resource (location and colocation)
@@ -2108,6 +2119,15 @@ components:
         kind:
           type: string
           description: Mandatory, Optional or Serialize (order)
+        ticket:
+          type: string
+          description: ticket id (rsc_ticket)
+        loss_policy:
+          type: string
+          description: loss policy (rsc_ticket)
+        role:
+          type: string
+          description: resource role the ticket dependency applies to (rsc_ticket)
         rule:
           $ref: '#/components/schemas/RuleInfo'
 
@@ -2131,8 +2151,8 @@ components:
           description: constraint id; must not be used by any other object
         type:
           type: string
-          description: location, colocation or order
-          enum: [location, colocation, order]
+          description: location, colocation, order or rsc_ticket (ticket is accepted as an alias)
+          enum: [location, colocation, order, rsc_ticket, ticket]
         resource:
           type: string
           description: subject resource; required for location and colocation
@@ -2155,6 +2175,17 @@ components:
           type: string
           description: order kind; Mandatory, Optional or Serialize (default Mandatory)
           enum: [Mandatory, Optional, Serialize]
+        ticket:
+          type: string
+          description: ticket id the resource depends on (rsc_ticket only)
+        loss_policy:
+          type: string
+          description: what happens when the ticket is lost (rsc_ticket only)
+          enum: [stop, demote, fence, freeze]
+        role:
+          type: string
+          description: resource role the dependency applies to (rsc_ticket only)
+          enum: [Started, Stopped, Promoted, Unpromoted, Master, Slave]
         rule:
           $ref: '#/components/schemas/RuleSpec'
         confirm:

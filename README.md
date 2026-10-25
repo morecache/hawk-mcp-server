@@ -126,7 +126,8 @@ re-creating would drop the resource history and its placement.
 | `resource_group_member_add` / `resource_group_member_remove` | `crm configure modgroup <group> add\|remove <resource>` | the supported way to change membership; removing a resource leaves it configured |
 | `resource_clones_list` | `GET /api/mcp/v1/resource-clones` | lists clones and the resource they wrap |
 | `resource_clone_create` | `crm configure clone <id> <resource\|group> [meta k=v ...]` | create-only; the child cannot be changed in place, and deleting a clone keeps the child |
-| `resource_constraints_list` / `resource_constraint_create` | `crm configure location\|colocation\|order ...` (rule-based locations use `cibadmin --modify`) | create-only; `type` selects the form and the required fields; a location may carry a rule instead of node/score |
+| `resource_constraints_list` | `GET /api/mcp/v1/resource-constraints` | lists constraints with their type and attributes |
+| `resource_constraint_create` | `crm configure location\|colocation\|order\|rsc_ticket ...` (rule-based locations use `cibadmin --modify`) | create-only; `type` selects the form and the required fields; a location may carry a rule instead of node/score, and `rsc_ticket` makes a resource depend on a ticket |
 
 Semantics worth knowing, all verified against crmsh on a live cluster:
 
@@ -138,6 +139,11 @@ Semantics worth knowing, all verified against crmsh on a live cluster:
   a hint that names the container.
 * `resources_list` reports the containing `group` as well as `clone`, and
   group members are included in the list instead of silently missing.
+* A `rsc_ticket` constraint makes a resource depend on a ticket (`ticket`, with
+  optional `role` and `loss_policy` stop/demote/fence/freeze). The resource only
+  runs while the ticket is granted to this site, so creating one against an
+  ungranted ticket stops the resource: grant the ticket with
+  `crm_ticket -t <ticket> -g` first if the resource must keep running.
 * Deleting a group or clone through `resource_delete` keeps its members; only
   the group/clone element goes away.
 * A location constraint may carry a **rule** instead of node/score:
