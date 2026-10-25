@@ -80,6 +80,43 @@ Flags:
 | `nodes_list` | `GET /api/mcp/v1/nodes` | nodes plus their CIB attributes and utilization values |
 | `resources_list` | `GET /api/mcp/v1/resources` | resources with parameters, meta attributes and live state |
 
+### Write actions
+
+Each action is one tool generated from `openapi.yaml`. **All of them require
+`{"confirm": true}` in the request body** (which the generated tool exposes as a
+nested `requestBody` argument); without it the call is rejected with HTTP 409 and
+nothing happens. Add `{"dry_run": true}` to get the exact `crm` command without
+executing it.
+
+| tool | runs | notes |
+|---|---|---|
+| `resource_start` / `resource_stop` | `crm --force resource start/stop <id>` | stopping a fencing resource disables fencing while it is stopped |
+| `resource_cleanup` | `crm --force resource cleanup <id> [<node>]` | clears the failure history so the resource may run again |
+| `resource_clear` | `crm --force resource clear <id>` | removes a placement constraint left by `migrate`/`move` |
+| `resource_migrate` | `crm --force resource migrate <id> <destination>` | needs `destination`; the move is sticky until `resource_clear` |
+| `resource_maintenance_on` / `resource_maintenance_off` | `crm --force resource maintenance <id> [off]` | pacemaker stops recovering the resource |
+| `resource_delete` | `crm --force configure delete <id>` | no undo |
+| `node_standby_on` / `node_standby_off` | `crm --force node standby/online <name>` | resources are moved away and not scheduled back |
+| `node_maintenance_on` / `node_maintenance_off` | `crm --force node maintenance/ready <name>` | resources on the node are frozen in place |
+| `node_fence` | `crm --force node fence <name>` | power-cycles the node; the most disruptive action |
+| `node_clearstate` | `crm --force node clearstate <name>` | clears a stale UNCLEAN flag |
+
+### Configuration writes
+
+These change CIB definitions instead of runtime state, and follow the same
+confirm/dry-run contract as the actions above.
+
+| tool | runs | notes |
+|---|---|---|
+| `resource_create` | `crm configure primitive <id> <class>[:<provider>]:<type> [k=v ...] [meta k=v ...]` | create-only: an existing id is answered with 409 `already_exists` and nothing changes |
+| `resource_parameter_set` | `crm resource param\|meta <id> set\|delete <name> [<value>]` | one parameter or meta attribute at a time; `meta: true` targets meta attributes, `delete: true` removes |
+| `node_attribute_set` | `crm node attribute <node> set <name> <value>` | location rules may react, so resources can move |
+| `node_attribute_delete` | `crm node attribute <node> delete <name>` | a missing attribute is not an error: the delete is idempotent (200, updated=false) |
+
+**Changing an existing resource is done with `resource_parameter_set`, not by
+re-creating it.** `crm configure primitive` refuses to touch an existing id, and
+re-creating would drop the resource history and its placement.
+
 ### Hand-written tools
 
 These exist because auto-generated tools cannot combine several API responses
@@ -121,10 +158,24 @@ curl -sS -X POST http://127.0.0.1:9000/mcp \
 
 ## Notes and limitations
 
-* **Generated from the spec.** Every operation in `openapi.yaml` becomes one
-  tool; write operations require `{"confirm": true}` in the request body.
+* **Confirmation semantics are ours, not openapi-mcp's.** In the upstream
+  library (v0.6.0) the "dangerous action confirmation" runs *after* the HTTP
+  request has already been sent, so it is not a guard. The real gate is the `confirm` flag
+  enforced by hawk-apiserver, which rejects the request before running anything.
+* `node_fence` is the only tool that calls itself "the most disruptive action this
+  API offers"; the other state-changing tools describe their effect individually
+  (stopping a resource, moving resources off a node, freezing a node's resources,
+  and so on). Mention the intent to the user before calling any of them.
+* **Not exposed yet:** resource groups, clones, colocation/order/location
+  constraints and resource operations (op parameters). The read side does not
+  report group membership either, so adding writes without reads would be
+  unverifiable; that is the next slice.
+* Resource parameters are passed to crmsh as a single argv token, so values
+  containing double quotes or line breaks are rejected rather than escaped.
 * In stdio mode, route the library's stdout chatter away (`./hawk-mcp-server ...
   >/dev/null`) if your client cannot tolerate extra output on the protocol
   channel; the Streamable HTTP transport does not have this problem.
-* `openapi.yaml` is the single source of truth. If it and the server disagree,
-  the tools silently return whatever the server sends, so keep them in sync.
+* `openapi.yaml` is the source of truth for the generated tools; the two
+  hand-written tools live in `main.go` and `tools.go`. If they and the server
+  disagree, the tools silently return whatever the server sends, so keep them in
+  sync.

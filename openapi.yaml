@@ -15,8 +15,13 @@ info:
 
     All responses are JSON objects. Errors are returned as
     {"error":{"code":"...","message":"..."}} together with a matching HTTP
-    status code (401 for a missing/invalid token, 503 when the cluster is
-    stopped or still initializing).
+    status code (401 for a missing/invalid token; 503 cluster_unavailable when
+    the cluster is stopped or still initializing; 503 token_file_unavailable or
+    token_file_empty when the MCP token file is missing or empty).
+
+    Write tools take their options as a nested requestBody object:
+    {"requestBody": {"confirm": true, "dry_run": true}}. A top-level "confirm"
+    is not accepted.
   version: 0.1.0
 
 servers:
@@ -36,6 +41,8 @@ tags:
     description: Runtime actions on resources
   - name: actions-node
     description: Runtime actions on nodes
+  - name: config
+    description: Configuration-level reads and writes that change CIB definitions
 
 paths:
   /api/mcp/v1/cluster:
@@ -217,8 +224,8 @@ paths:
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
 
-        This is a destructive or disruptive action: it can stop workloads or
-        power-cycle a node. State the intent to the user before calling it.
+        State the intent to the user before calling it.
+        The node itself is not touched.
 
         After calling it, re-read the state with resources_list or crm_status_get
         to confirm the effect (role/active of the resource).
@@ -257,9 +264,14 @@ paths:
       tags: [actions-resource]
       summary: Clear a resource's failure history (not its placement constraint; see resource_clear)
       description: |
-        Clears the failure history of the resource (`crm --force resource cleanup <id> [<node>]`).
-        Useful after fixing the cause of a failed resource: it drops the failcount and
-        allows the resource to run on a node again. It does not start or stop anything.
+        Failcount: clears the failure history (failcount) of the resource (`crm --force
+        cleanup <id> [<node>]`); it does not clear a placement constraint (use
+        resource_clear for that). Useful after fixing the cause of a failed resource:
+        it drops the failcount and allows the resource to run on a node again. It does
+        not start or stop anything.
+
+        Set the optional "destination" to clear the failcount on one node only; omit
+        it to clear it on all nodes.
 
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
@@ -278,7 +290,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/WriteOptions'
+              $ref: '#/components/schemas/WriteOptionsWithDestination'
       responses:
         '200':
           description: Command result
@@ -301,9 +313,10 @@ paths:
       tags: [actions-resource]
       summary: Clear the placement constraint left by a move/migrate (not the failure history; see resource_cleanup)
       description: |
-        Removes transient placement constraints, for example one left behind by an
+        Placement: removes transient placement constraints, for example one left behind
         earlier `crm resource move` (`crm --force resource clear <id>`), so the scheduler
-        is free to place the resource again.
+        is free to place the resource again; it does not touch the failure history (use
+        resource_cleanup for that).
 
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
@@ -351,8 +364,8 @@ paths:
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
 
-        This is a destructive or disruptive action: it can stop workloads or
-        power-cycle a node. State the intent to the user before calling it.
+        This does not start or stop the resource. State the intent to the user
+        before calling it.
 
         After calling it, re-read the state with resources_list or crm_status_get
         to confirm the effect (maintenance flag of the resource).
@@ -442,8 +455,6 @@ paths:
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
 
-        The request body must also carry the target node in "destination".
-
         After calling it, re-read the state with resources_list or crm_status_get
         to confirm the effect (node of the resource).
       parameters:
@@ -458,7 +469,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/WriteOptions'
+              $ref: '#/components/schemas/WriteOptionsMigrate'
       responses:
         '200':
           description: Command result
@@ -479,23 +490,22 @@ paths:
     post:
       operationId: resource_delete
       tags: [actions-resource]
-      summary: Delete a resource from the CIB
+      summary: Delete a CIB configuration object (primitive, group, clone or constraint)
       description: |
-        Deletes the resource definition from the CIB (`crm --force configure delete <id>`).
-        The resource is stopped first if it is running. There is no undo.
+        Deletes a configuration object from the CIB by id (`crm --force configure delete <id>`):
+        a primitive, a group, a clone or a constraint. A running primitive is stopped as
+        part of the removal; there is no undo.
 
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
 
-        This is a destructive or disruptive action: it can stop workloads or
-        power-cycle a node. State the intent to the user before calling it.
+        State the intent to the user before calling it.
 
         After calling it, re-read the state with resources_list or crm_status_get
         to confirm the effect (resource no longer present in resources_list).
 
         Deleting a group or clone removes only the container; its member resources stay configured.
 
-        It deletes any configuration object by id: a primitive, group, clone or constraint.
       parameters:
         - name: id
           in: path
@@ -537,8 +547,8 @@ paths:
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
 
-        This is a destructive or disruptive action: it can stop workloads or
-        power-cycle a node. State the intent to the user before calling it.
+        Workloads may move or briefly stop. State the intent to the user before
+        calling it.
 
         After calling it, re-read the state with resources_list or crm_status_get
         to confirm the effect (standby flag and resources_running of the node).
@@ -628,8 +638,8 @@ paths:
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
 
-        This is a destructive or disruptive action: it can stop workloads or
-        power-cycle a node. State the intent to the user before calling it.
+        This does not start, stop or restart anything. State the intent to the
+        user before calling it.
 
         After calling it, re-read the state with resources_list or crm_status_get
         to confirm the effect (maintenance flag of the node).
@@ -668,7 +678,8 @@ paths:
       tags: [actions-node]
       summary: Remove a node from maintenance mode
       description: |
-        Takes the node out of maintenance mode (`crm --force node ready <name>`).
+        Takes the node out of maintenance mode (`crm --force node ready <name>`), so
+        pacemaker recovers and schedules resources on it again.
 
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
@@ -711,15 +722,14 @@ paths:
       summary: Fence (power cycle) a node
       description: |
         Fences the node (`crm --force node fence <name>`), i.e. asks the fencing device
-        to power it off and back on. All guests on that node are terminated. Use it only
+        to power it off and back on. Every resource on that node is terminated. Use it only
         when the node is unreachable or must be reset; it is the most disruptive action
         this API offers.
 
         Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
         exact crm command without running it.
 
-        This is a destructive or disruptive action: it can stop workloads or
-        power-cycle a node. State the intent to the user before calling it.
+        State the intent to the user before calling it.
 
         After calling it, re-read the state with resources_list or crm_status_get
         to confirm the effect (online flag of the node afterwards).
@@ -756,7 +766,7 @@ paths:
     post:
       operationId: node_clearstate
       tags: [actions-node]
-      summary: Clear a node state
+      summary: Clear a node's UNCLEAN state
       description: |
         Clears the node state (`crm --force node clearstate <name>`), for example a
         stale UNCLEAN flag after a fence or a network failure, so that the node can
@@ -795,6 +805,174 @@ paths:
           $ref: '#/components/responses/ConfirmationRequired'
         '500':
           $ref: '#/components/responses/CommandFailed'
+  /api/mcp/v1/resource-definitions:
+    post:
+      operationId: resource_create
+      tags: [config]
+      summary: Create a primitive resource definition
+      description: |
+        Creates a new primitive: `crm configure primitive <id>
+        <class>[:<provider>]:<type> [k=v ...] [meta k=v ...]`. This tool is
+        create-only: an existing id answers 409 already_exists and nothing changes.
+        To change a resource use resource_parameter_set, one parameter at a time
+        (set "delete": true to delete one); that keeps its history and placement.
+
+        Identifiers are validated before anything runs, values must not contain
+        double quotes or line breaks, and an unknown agent is rejected with 400
+        before the CIB is modified.
+
+        Requires {"confirm": true}. Add {"dry_run": true} to get the exact command
+        without changing the CIB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceDefinition'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/resource-parameters:
+    post:
+      operationId: resource_parameter_set
+      tags: [config]
+      summary: Set or delete one instance parameter or meta attribute
+      description: |
+        Changes exactly one instance parameter (meta=false, the default) of an
+        existing primitive, or one meta attribute (meta=true) of an existing
+        primitive, group or clone:
+
+          crm resource param <id> set    <name> <value>
+          crm resource param <id> delete <name>
+          crm resource meta  <id> set    <name> <value>
+          crm resource meta  <id> delete <name>
+
+        This is the supported way to change an existing resource: unlike re-creating it,
+        it keeps the resource history and its current placement. A parameter that is
+        exported as a node attribute or utilization can cause a restart or a move, so
+        re-read resources_list afterwards. Deleting a parameter that is not set is not
+        an error; the response reports updated=false and says there was nothing to do.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview the command.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceParameter'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/node-attributes:
+    post:
+      operationId: node_attribute_set
+      tags: [config]
+      summary: Set a permanent node attribute
+      description: |
+        Sets a node attribute in the CIB (`crm node attribute <node> set <name> <value>`).
+        Node attributes are used by location rules and resource rules, so setting one
+        can cause resources to move. The response reports whether the attribute was
+        created or updated.
+
+        The node must be a cluster member (404 otherwise) and the name must match a
+        conservative pattern. Requires {"confirm": true}; add {"dry_run": true} to
+        preview the command.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeAttributeSet'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/node-attributes/delete:
+    post:
+      operationId: node_attribute_delete
+      tags: [config]
+      summary: Delete a permanent node attribute
+      description: |
+        Removes a node attribute from the CIB (`crm node attribute <node> delete <name>`).
+        Deleting an attribute that is not set is not an error: the response reports
+        updated=false and explains that there was nothing to delete. Location rules that
+        reference the attribute can become unsatisfiable, which may block resources, so
+        review the rules before deleting an attribute you did not create.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview the command.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeAttributeDeleteRequest'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -834,6 +1012,18 @@ components:
             $ref: '#/components/schemas/ErrorEnvelope'
     CommandFailed:
       description: The underlying crm command failed; the payload carries the command line and stderr
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: The referenced node or resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: The request needs confirmation, or the object already exists
       content:
         application/json:
           schema:
@@ -1089,11 +1279,41 @@ components:
             When true, return the crm command that would run without executing it.
             Use it to check what an action would do before confirming it.
           default: false
+
+    WriteOptionsWithDestination:
+      type: object
+      description: Request body of resource_cleanup; the target node is optional.
+      required: [confirm]
+      properties:
+        confirm:
+          type: boolean
+          description: Must be true. Confirms that the caller intends to change cluster state.
+        dry_run:
+          type: boolean
+          description: |
+            When true, return the crm command that would run without executing it.
+          default: false
         destination:
           type: string
           description: |
-            Target node for actions that need one: resource_migrate (required) and
-            resource_cleanup (optional; omit to clean up on all nodes).
+            Node to clean up on; omit to clean up on all nodes.
+
+    WriteOptionsMigrate:
+      type: object
+      description: Request body of resource_migrate, which needs a target node.
+      required: [confirm, destination]
+      properties:
+        confirm:
+          type: boolean
+          description: Must be true. Confirms that the caller intends to change cluster state.
+        dry_run:
+          type: boolean
+          description: |
+            When true, return the crm command that would run without executing it.
+          default: false
+        destination:
+          type: string
+          description: target node; required for resource_migrate.
 
     CommandResult:
       type: object
@@ -1124,3 +1344,150 @@ components:
         stderr:
           type: string
           description: Captured crm stderr, when non-empty
+
+    ResourceDefinition:
+      type: object
+      description: Primitive definition for resource_create
+      required: [id, class, type, confirm]
+      properties:
+        id:
+          type: string
+          description: resource id (letters, digits, underscore, dot, dash; must not exist yet)
+        class:
+          type: string
+          description: resource agent class, for example ocf
+        provider:
+          type: string
+          description: resource agent provider, for example heartbeat; omit for classes without one
+        type:
+          type: string
+          description: resource agent type, for example IPaddr2
+        params:
+          type: object
+          description: instance parameters as a flat name/value object
+          additionalProperties:
+            type: string
+        meta:
+          type: object
+          description: meta attributes as a flat name/value object; empty values are ignored
+          additionalProperties:
+            type: string
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the crm command without executing it
+          default: false
+
+    ResourceParameter:
+      type: object
+      description: One instance parameter or meta attribute of an existing resource
+      required: [resource, name, confirm]
+      properties:
+        resource:
+          type: string
+          description: id of an existing resource
+        name:
+          type: string
+          description: parameter or meta attribute name
+        value:
+          type: string
+          description: value to set; ignored when delete is true, must not contain quotes or line breaks
+        meta:
+          type: boolean
+          description: when true operate on a meta attribute instead of an instance parameter
+          default: false
+        delete:
+          type: boolean
+          description: when true delete the parameter instead of setting it
+          default: false
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the crm command without executing it
+          default: false
+
+    NodeAttributeSet:
+      type: object
+      required: [node, name, value, confirm]
+      properties:
+        node:
+          type: string
+          description: cluster node name
+        name:
+          type: string
+          description: attribute name
+        value:
+          type: string
+          description: attribute value; must not contain double quotes or line breaks
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the crm command without executing it
+          default: false
+
+    NodeAttributeDeleteRequest:
+      type: object
+      required: [node, name, confirm]
+      properties:
+        node:
+          type: string
+          description: cluster node name
+        name:
+          type: string
+          description: attribute name to delete
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the crm command without executing it
+          default: false
+
+    ConfigResult:
+      type: object
+      description: Result of a configuration write
+      required: [action, object, subject, command, executed, created, updated, message]
+      properties:
+        action:
+          type: string
+          description: finer-grained operation id; it is not always a tool name
+            (for example resource_meta_set and resource_operation_update are
+            returned by resource_parameter_set and resource_operation_set)
+        object:
+          type: string
+          description: the kind of the changed object (resource, resource_parameter,
+            node_attribute, group, clone, constraint, resource_operation or
+            cluster_property)
+        subject:
+          type: string
+          description: affected id, or <resource>/<name>, <resource>/<name>@<interval>, <scope>/<name> or <node>/<name>
+        command:
+          type: array
+          description: exact argv that was executed (for a dry run, would be executed); empty when nothing was run (a no-op delete)
+          items:
+            type: string
+        dry_run:
+          type: boolean
+        executed:
+          type: boolean
+          description: true when the command actually ran
+        created:
+          type: boolean
+          description: true when a new object, parameter or attribute was created
+        updated:
+          type: boolean
+          description: true when an existing object, parameter or attribute was changed or removed
+        message:
+          type: string
+        stdout:
+          type: string
+          description: captured crm stdout, when non-empty
+        stderr:
+          type: string
+          description: captured crm stderr, when non-empty
