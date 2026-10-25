@@ -43,6 +43,8 @@ tags:
     description: Runtime actions on nodes
   - name: config
     description: Configuration-level reads and writes that change CIB definitions
+  - name: discovery
+    description: Read-only discovery of agents, fencing and configuration
 
 paths:
   /api/mcp/v1/cluster:
@@ -1484,6 +1486,190 @@ paths:
           $ref: '#/components/responses/GatewayTimeout'
         '500':
           $ref: '#/components/responses/CommandFailed'
+  /api/mcp/v1/resource-agents:
+    get:
+      operationId: resource_agents_list
+      tags: [discovery]
+      summary: List resource agent classes or the types of one class
+      description: |
+        Without parameters this returns the resource agent classes and the
+        providers of ocf (crm ra classes). With "class" (and optionally
+        "provider") it returns the agent types of that class/provider
+        (crm ra list), for example all ocf:heartbeat type names.
+
+        Use it before resource_create: the create call needs a class, provider
+        and type, and guessing the names is the most common way to get it wrong.
+        The answer is cached for a few minutes because loading all agent metadata
+        takes several seconds.
+      parameters:
+        - name: class
+          in: query
+          required: false
+          description: resource agent class, for example ocf; omit to list the classes
+          schema:
+            type: string
+        - name: provider
+          in: query
+          required: false
+          description: provider of the class (ocf only), for example heartbeat
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Classes, or the types of the requested class
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/AgentClasses'
+                  - $ref: '#/components/schemas/AgentTypes'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resource-agent-info:
+    get:
+      operationId: resource_agent_info
+      tags: [discovery]
+      summary: Show the parameters and defaults of one resource agent
+      description: |
+        Returns the text of crm ra info <agent>: required and optional parameters,
+        their defaults, and the advisory operation defaults. Use it after
+        resource_agents_list to find the parameter names for resource_create.
+        Output is stripped of ANSI colour codes and limited to 400 lines.
+
+        This tool describes the agent, not a resource; use resource_explain for one
+        resource.
+      parameters:
+        - name: agent
+          in: query
+          required: true
+          description: full agent name, for example ocf:heartbeat:IPaddr2
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent description
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentInfo'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/mcp/v1/fencing-devices:
+    get:
+      operationId: fence_devices_list
+      tags: [discovery]
+      summary: List configured fencing devices
+      description: |
+        Returns the stonith primitives configured in the CIB with their class,
+        provider, type, instance parameters and meta attributes, the names
+        stonith_admin reports, and the current stonith-enabled property. Use it to
+        check whether fencing is configured at all before trusting a failure
+        handling path.
+      responses:
+        '200':
+          description: Fencing devices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FenceDevices'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/fencing-history:
+    get:
+      operationId: fence_history_get
+      tags: [discovery]
+      summary: Show the fencing history of one node
+      description: |
+        Returns the output of stonith_admin -H <node>: the recorded fencing
+        actions for that node, as reported by stonith_admin, with their results. Use it when a
+        node rebooted unexpectedly, to tell a real fence from a crash or a manual
+        reboot. One node per call; an unknown node is answered with 404.
+      parameters:
+        - name: node
+          in: query
+          required: true
+          description: cluster node name
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Fencing history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextReport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/config-snapshot:
+    get:
+      operationId: config_snapshot_get
+      tags: [discovery]
+      summary: Get the CIB configuration as text (truncated)
+      description: |
+        Returns the output of crm configure show, the CIB in configuration syntax,
+        together with the CIB epoch and last-written timestamp. Use it as a
+        snapshot before a batch of changes and to compare with the result
+        afterwards.
+
+        The text is truncated to 2000 lines or 256 KiB, whichever comes first;
+        truncated=true means it was cut, so do not treat it as the complete
+        configuration.
+
+        The epoch here is the numeric CIB epoch, not the admin_epoch:epoch:num_updates form cluster_get reports.
+      responses:
+        '200':
+          description: Configuration snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigSnapshot'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/config-verify:
+    get:
+      operationId: config_verify
+      tags: [discovery]
+      summary: Validate the CIB configuration
+      description: |
+        Runs crm configure verify (crm_verify) and reports whether the CIB is
+        valid, the exit code and any diagnostics. Use it after editing the
+        configuration to confirm nothing was left inconsistent.
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigVerify'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 components:
   securitySchemes:
     bearerAuth:
@@ -1611,7 +1797,7 @@ components:
           description: dc-version property
         fencing_enabled:
           type: string
-          description: stonith-enabled property ("true" or "false")
+          description: stonith-enabled property ("true"/"false"); the legacy fencing-enabled property is used as a fallback
         node_count:
           type: integer
           description: Number of nodes reported by crm_mon
@@ -2682,3 +2868,140 @@ components:
         text:
           type: string
           description: ANSI-stripped output, truncated to limit lines and 512 KiB
+
+    AgentClass:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        providers:
+          type: array
+          items:
+            type: string
+
+    AgentClasses:
+      type: object
+      required: [classes, count]
+      properties:
+        classes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentClass'
+        count:
+          type: integer
+
+    AgentTypes:
+      type: object
+      required: [class, types, count]
+      properties:
+        class:
+          type: string
+        provider:
+          type: string
+        types:
+          type: array
+          items:
+            type: string
+        count:
+          type: integer
+
+    AgentInfo:
+      type: object
+      required: [agent, text, lines, truncated]
+      properties:
+        agent:
+          type: string
+        text:
+          type: string
+        lines:
+          type: integer
+        truncated:
+          type: boolean
+
+    FenceDevice:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        class:
+          type: string
+        provider:
+          type: string
+        type:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        meta:
+          type: object
+          additionalProperties:
+            type: string
+
+    FenceDevices:
+      type: object
+      required: [devices, count]
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/FenceDevice'
+        count:
+          type: integer
+        clustered_names:
+          type: array
+          description: device names as reported by stonith_admin -L
+          items:
+            type: string
+        stonith_enabled:
+          type: string
+          description: value of the stonith-enabled cluster property (the legacy fencing-enabled property is used as a fallback)
+
+    TextReport:
+      type: object
+      required: [subject, command, text, lines, truncated]
+      properties:
+        subject:
+          type: string
+        command:
+          type: array
+          items:
+            type: string
+        text:
+          type: string
+        lines:
+          type: integer
+        truncated:
+          type: boolean
+
+    ConfigSnapshot:
+      type: object
+      required: [text, lines, truncated]
+      properties:
+        text:
+          type: string
+        lines:
+          type: integer
+        truncated:
+          type: boolean
+        epoch:
+          type: string
+        last_written:
+          type: string
+        update_origin:
+          type: string
+
+    ConfigVerify:
+      type: object
+      required: [ok, exit_code, output, duration_seconds]
+      properties:
+        ok:
+          type: boolean
+        exit_code:
+          type: integer
+        output:
+          type: string
+        duration_seconds:
+          type: integer

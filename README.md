@@ -193,6 +193,17 @@ operations. Typical exit codes:
 0 ok, 2 invalid parameter, 6 not configured, 7 not running, 124/125 timeout, 190/191 degraded,
 126/127 the agent could not be executed.
 
+### Discovery and diagnostics
+
+| tool | runs | use it for |
+|---|---|---|
+| `resource_agents_list` | `crm ra classes` (no class) / `crm ra list <class> [<provider>]` | find the class/provider/type names that `resource_create` needs; listing all types takes a few seconds and is cached |
+| `resource_agent_info` | `crm ra info <agent>` | read an agent's parameters, defaults and advisory operations before creating a resource of that type |
+| `fence_devices_list` | CIB stonith primitives + `stonith_admin -L` | check that fencing is configured, and with which device and parameters |
+| `fence_history_get` | `stonith_admin -H <node>` | tell a real fence from a crash or a manual reboot |
+| `config_snapshot_get` | `crm configure show` | snapshot the configuration before a batch of changes |
+| `config_verify` | `crm configure verify` (crm_verify) | validate the CIB after editing |
+
 ### Textual history reports
 
 | tool | runs | notes |
