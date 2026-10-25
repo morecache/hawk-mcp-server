@@ -152,7 +152,8 @@ paths:
         orphaned/blocked flags, how many nodes it runs on and which ones, the
         clone it belongs to (omitted for non-clone members), and the instance
         parameters and meta attributes stored in the CIB. The group field is
-        set when the resource is a member of a group.
+        set when the resource is a member of a group, and operations lists the
+        configured operations when the resource has any.
 
         Use this to inspect resource configuration and parameters. Note that
         the derived flags (orphaned, blocked, failure_ignored) are omitted when
@@ -1244,6 +1245,125 @@ paths:
           $ref: '#/components/responses/CommandFailed'
         '503':
           $ref: '#/components/responses/ClusterUnavailable'
+  /api/mcp/v1/resource-operations:
+    post:
+      operationId: resource_operation_set
+      tags: [config]
+      summary: Set or delete one resource operation
+      description: |
+        Changes one operation of a primitive, for example a monitor interval:
+
+          cibadmin --modify  --xpath //primitive[@id='<r>']                        --xml-text '<primitive ...><operations><op .../></operations></primitive>'
+          cibadmin --replace --xpath //primitive[@id='<r>']/operations/op[@id='<id>'] --xml-text '<op .../>'
+          cibadmin --delete  --xpath //primitive[@id='<r>']/operations/op[@id='<id>']
+
+        Operations are edited through cibadmin because `crm configure op` is an
+        alias for op_defaults and cannot touch one resource's operations. The
+        operation id is <resource>-<name>-<interval>; a bare interval number means
+        seconds ("10" and "10s" both become 10s). Setting an existing id replaces
+        the whole operation, so omitted attributes are reset (there is no merge).
+        "delete": true removes it, including the empty operations element when it
+        was the last one; deleting a missing operation is not an error. Only
+        primitives have operations; groups and clones inherit them from members.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceOperationSet'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/cluster-properties:
+    get:
+      operationId: cluster_properties_list
+      tags: [config]
+      summary: List cluster properties, resource defaults and operation defaults
+      description: |
+        Returns the three configuration property sets as flat name/value objects:
+
+          cluster       crm_config   (stonith-enabled, no-quorum-policy, ...)
+          rsc_defaults  rsc_defaults (resource-stickiness, migration-threshold, ...)
+          op_defaults   op_defaults  (timeout, record-pending, ...)
+
+        Use it to see which defaults are in effect before changing one, and to
+        verify a write afterwards.
+      responses:
+        '200':
+          description: Property sets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterProperties'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+    post:
+      operationId: cluster_property_set
+      tags: [config]
+      summary: Set or delete one cluster property or default
+      description: |
+        Sets one property with the corresponding crmsh command:
+
+          crm configure property      <name>=<value>   scope cluster
+          crm configure rsc_defaults  <name>=<value>   scope rsc_defaults
+          crm configure op_defaults   <name>=<value>   scope op_defaults
+
+        Deletion uses cibadmin, because crmsh rejects an empty value:
+
+          cibadmin --delete --xpath //crm_config//nvpair[@name='<name>']      (scope cluster)
+          cibadmin --delete --xpath //rsc_defaults//nvpair[@name='<name>']   (scope rsc_defaults)
+          cibadmin --delete --xpath //op_defaults//nvpair[@name='<name>']    (scope op_defaults)
+
+        Deleting a property that is not set is not an error (the response explains
+        that there was nothing to delete). Some properties have consequences the
+        API cannot check: setting stonith-enabled=false disables fencing, and
+        disabling a node or a resource management property can stop recovery.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClusterPropertySet'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -1510,6 +1630,11 @@ components:
           description: Meta attributes from the CIB as a flat name/value object
           additionalProperties:
             type: string
+        operations:
+          type: array
+          description: configured operations of the resource (omitted when there are none)
+          items:
+            $ref: '#/components/schemas/Operation'
 
     ResourceList:
       type: object
@@ -1982,4 +2107,129 @@ components:
         dry_run:
           type: boolean
           description: return the crm command without executing it
+          default: false
+
+    Operation:
+      type: object
+      description: One configured operation of a primitive
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          description: pacemaker operation id, <resource>-<name>-<interval>
+        name:
+          type: string
+          description: operation name, for example monitor or start
+        interval:
+          type: string
+          description: interval as stored in the CIB, for example 10s or 10000
+        timeout:
+          type: string
+        on_fail:
+          type: string
+        role:
+          type: string
+        start_delay:
+          type: string
+        enabled:
+          type: string
+        description:
+          type: string
+        requires:
+          type: string
+        record_pending:
+          type: string
+        depth:
+          type: string
+        interval_origin:
+          type: string
+
+    ResourceOperationSet:
+      type: object
+      required: [resource, name, confirm]
+      properties:
+        resource:
+          type: string
+          description: id of an existing primitive
+        name:
+          type: string
+          description: operation name, for example monitor, start, stop, promote
+        interval:
+          type: string
+          description: interval; a bare number means seconds, default 0s
+        timeout:
+          type: string
+        on_fail:
+          type: string
+          description: ignore, restart, restart-container, stop, fence, standby or block
+        role:
+          type: string
+          description: Started, Stopped, Promoted, Unpromoted, Master or Slave
+        start_delay:
+          type: string
+        enabled:
+          type: string
+        description:
+          type: string
+        requires:
+          type: string
+        record_pending:
+          type: string
+        delete:
+          type: boolean
+          description: when true delete the operation instead of setting it
+          default: false
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the cibadmin command without executing it
+          default: false
+
+    ClusterProperties:
+      type: object
+      description: The three configuration property sets
+      required: [cluster, rsc_defaults, op_defaults]
+      properties:
+        cluster:
+          type: object
+          description: crm_config properties
+          additionalProperties:
+            type: string
+        rsc_defaults:
+          type: object
+          description: rsc_defaults properties
+          additionalProperties:
+            type: string
+        op_defaults:
+          type: object
+          description: op_defaults properties
+          additionalProperties:
+            type: string
+
+    ClusterPropertySet:
+      type: object
+      required: [name, confirm]
+      properties:
+        scope:
+          type: string
+          description: cluster (default), rsc_defaults or op_defaults
+          enum: [cluster, rsc_defaults, op_defaults]
+        name:
+          type: string
+          description: property name, for example stonith-enabled
+        value:
+          type: string
+          description: value to set; ignored when delete is true
+        delete:
+          type: boolean
+          description: when true delete the property instead of setting it
+          default: false
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the command without executing it
           default: false

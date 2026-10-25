@@ -141,6 +141,25 @@ Semantics worth knowing, all verified against crmsh on a live cluster:
 * Deleting a group or clone through `resource_delete` keeps its members; only
   the group/clone element goes away.
 
+### Resource operations and cluster defaults
+
+| tool | runs | notes |
+|---|---|---|
+| `resource_operation_set` | `cibadmin --modify\|--replace\|--delete` | one operation of a primitive; op id is `<resource>-<name>-<interval>`, and a bare interval number means seconds |
+| `cluster_properties_list` | reads `crm_config`, `rsc_defaults`, `op_defaults` | see which defaults are in effect |
+| `cluster_property_set` | `crm configure property\|rsc_defaults\|op_defaults <name>=<value>` | delete uses `cibadmin --delete` because crmsh rejects an empty value |
+
+Operations are edited through `cibadmin` on purpose: `crm configure op` is an
+alias for `op_defaults` and cannot change one resource's operations. Setting an
+operation replaces the whole `op` element, so omitted attributes are reset;
+deleting the last operation also removes the empty `operations` element, and
+deleting an operation that is not configured is a no-op.
+
+Property scopes are `cluster` (default), `rsc_defaults` and `op_defaults`.
+Some values have consequences the API cannot check: `stonith-enabled=false`
+disables fencing, and defaults such as `resource-stickiness` or
+`migration-threshold` change how the scheduler behaves cluster-wide.
+
 ### Hand-written tools
 
 These exist because auto-generated tools cannot combine several API responses
@@ -190,9 +209,8 @@ curl -sS -X POST http://127.0.0.1:9000/mcp \
   API offers"; the other state-changing tools describe their effect individually
   (stopping a resource, moving resources off a node, freezing a node's resources,
   and so on). Mention the intent to the user before calling any of them.
-* **Not exposed yet:** resource operation parameters (op actions such as
-  `monitor interval=10s` or `start timeout=60s`), remote and bundle resources,
-  and the cluster-wide properties (`crm configure property`).
+* **Not exposed yet:** remote and bundle resources, ticket constraints, rule
+  expressions (time/date-based constraints) and resource history (`crm history`).
 * Resource parameters are passed to crmsh as a single argv token, so values
   containing double quotes or line breaks are rejected rather than escaped.
 * In stdio mode, route the library's stdout chatter away (`./hawk-mcp-server ...
