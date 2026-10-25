@@ -20,17 +20,37 @@ It is a thin adapter on purpose:
   contain `confirm`; a write call needs `{"confirm": true}` (optionally
   `{"dry_run": true}`), otherwise it is answered with 409.
 
+## Getting started
+
+This server only works together with the `mcp-api` branch of hawk-apiserver; the two
+repositories are a pair:
+
+| repository | branch | contains |
+|---|---|---|
+| hawk-apiserver | `mcp-api` | handlers for `/api/mcp/v1`, documentation in `docs/mcp-api.md` |
+| hawk-mcp-server | `master` | `openapi.yaml`, tool registration and the hand-written tools |
+
+Build the apiserver from its branch, prepare `/etc/hawk/mcp.token` and the TLS
+files, then:
+
+```sh
+go build -o hawk-mcp-server .
+./hawk-mcp-server -hawk-url https://127.0.0.1:7630 -token-file /etc/hawk/mcp.token -http 127.0.0.1:9000
+```
+
+Point an MCP client at `http://127.0.0.1:9000/mcp`; `tools/list` should return
+49 tools: 46 operations from `openapi.yaml`, the library's `info`, and
+`resource_explain`/`node_drain`.
+
+To change a tool, update `openapi.yaml` and, for a new endpoint, the matching
+handler in hawk-apiserver; then update the table below and rebuild both
+repositories.
+
 ## Prerequisites
 
-1. A patched `hawk-apiserver` build that serves `/api/mcp/v1` (the `mcp-api`
-   branch of `/root/go/src/hawk-apiserver`). Start it on its own port so it does
-   not collide with the packaged `hawk.service` on 7630:
-
-   ```
-   HAWK_MCP_TOKEN_FILE=/etc/hawk/mcp.token \
-   PATH/TO/hawk-apiserver \
-       -key /etc/hawk/hawk.key -cert /etc/hawk/hawk.pem -port 7630
-   ```
+1. A running pacemaker/corosync cluster. When the cluster is stopped or still
+   initializing, the endpoints answer `503 cluster_unavailable` instead of
+   pretending the cluster is empty.
 
 2. A bearer token file (mode 0600), for example:
 
@@ -39,9 +59,15 @@ It is a thin adapter on purpose:
    head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > /etc/hawk/mcp.token
    ```
 
-3. A running pacemaker/corosync cluster. When the cluster is stopped or still
-   initializing, the endpoints answer `503 cluster_unavailable` instead of
-   pretending the cluster is empty.
+3. A hawk-apiserver checkout with the `mcp-api` branch, built so that it
+   serves `/api/mcp/v1` (its `docs/mcp-api.md` covers the API).
+   Start it on port 7630:
+
+   ```
+   HAWK_MCP_TOKEN_FILE=/etc/hawk/mcp.token \
+   PATH/TO/hawk-apiserver \
+       -key /etc/hawk/hawk.key -cert /etc/hawk/hawk.pem -port 7630
+   ```
 
 ## Build
 
@@ -223,7 +249,7 @@ operations. Typical exit codes:
 
 | tool | runs | notes |
 |---|---|---|
-| `history_report_get` | `crm history <kind> [<object>]` | human-readable narrative: raw log view, resource events, node events, transition list, events or latest news |
+| `history_report_get` | `crm history <kind> [<object>]` | curated cross-node report: log summary, resource/node events, transition list, events or latest news; not a raw per-node journal |
 
 `crm history` collects logs from every node through `crm report`, so one call
 takes about ten seconds. Output is stripped of ANSI colour codes and truncated
@@ -233,8 +259,11 @@ per-resource operation records instead of prose.
 
 ### Hand-written tools
 
-These exist because auto-generated tools cannot combine several API responses
-into one answer, or wait for an operation to finish.
+Most tools are generated from `openapi.yaml` and proxy the HTTP body as-is.
+Two are hand-written because the generated shape is not a good fit: they combine
+several API responses into one answer, or wait for an operation to finish.
+Generated write tools also keep the nested `requestBody` with `confirm` and
+`dry_run`, which some LLMs do not fill reliably.
 
 | tool | what it does |
 |---|---|
@@ -249,6 +278,20 @@ MCP Inspector:
 npx @modelcontextprotocol/inspector
 # Transport Type: Streamable HTTP
 # URL: http://127.0.0.1:9000/mcp
+```
+
+Testing with mcphost and a real model:
+
+```sh
+export GOOGLE_API_KEY=...
+mcphost -m google:gemini-2.5-flash --config mcphost.json
+```
+
+If you use mcphost, create a local `mcphost.json` that points at
+`http://localhost:9000/mcp`:
+
+```json
+{"mcpServers":{"hawk":{"type":"remote","url":"http://localhost:9000/mcp"}}}
 ```
 
 Raw JSON-RPC over the Streamable HTTP endpoint:
@@ -269,6 +312,24 @@ curl -sS -X POST http://127.0.0.1:9000/mcp \
   -H "Mcp-Session-Id: $SID" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"resource_stop","arguments":{"id":"stonith-sbd","requestBody":{"confirm":true,"dry_run":true}}}}'
 ```
+
+## Glossary
+
+| term | meaning |
+|---|---|
+| MCP | Model Context Protocol, the JSON-RPC interface this server speaks to LLM clients |
+| CIB | Pacemaker's cluster information base; all configured objects and their state live there |
+| `crm_mon` | Pacemaker's status tool; this API parses its XML for live node and resource state |
+| DC / quorum | designated coordinator; quorum is the majority a partition needs to act |
+| fencing / STONITH | power or I/O isolation of a failed node so it cannot corrupt shared data |
+| ticket | cluster-wide flag a resource can depend on; granted tickets allow the resource to run |
+| `--force` | run crmsh without its interactive confirmation; the API's confirm is a separate gate |
+| promotable clone | clone with a promoted instance (legacy name: master/slave) |
+| `lrm_rsc_op` | CIB record of one operation (start, monitor, ...) on one node, with its exit code |
+| operation / `op` | a timed action such as `monitor interval=10s`, stored per resource |
+| meta attribute | per-object setting (target-role, maintenance, ...) rather than a resource parameter |
+| `class:provider:type` | resource agent identifier, for example `ocf:heartbeat:Dummy` |
+| remote node | node that joins through an `ocf:pacemaker:remote` primitive on port 3121 |
 
 ## Notes and limitations
 
@@ -292,3 +353,8 @@ curl -sS -X POST http://127.0.0.1:9000/mcp \
   hand-written tools live in `main.go` and `tools.go`. If they and the server
   disagree, the tools silently return whatever the server sends, so keep them in
   sync.
+
+* **No audit log.** Successful writes are not logged; a valid token can fence
+  or delete anything in the cluster.
+* Non-rule location and colocation scores are integers, so `-inf` needs a
+  location rule; a colocation cannot express "never together".
