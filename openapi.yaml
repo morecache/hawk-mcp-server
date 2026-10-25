@@ -1222,13 +1222,13 @@ paths:
         or a clone; a resource inside a group cannot carry a constraint directly
         because crmsh would treat it as ambiguous, so target the group instead.
         Location targets must be known cluster nodes.
-        A location constraint may carry a "rule" instead of node/score. The rule is
-        a pacemaker condition: attribute expressions (#uname, #kind, node
-        attributes), a recurring date_spec window (hours, weekdays, months, ...) or
-        an absolute in_range window, combined with boolean_op and awarding "score"
-        when it matches. Rules are only supported on location constraints, node and
-        score must not be combined with a rule, and the rule is written through
-        cibadmin because crmsh has no grammar for date expressions.
+        A location may carry a "rule" instead of node/score: a pacemaker condition
+        with attribute expressions (#uname, #kind, node attributes), a recurring
+        date_spec window (hours, weekdays, months, ...) or an absolute in_range
+        window, combined by boolean_op (default or); when it matches it awards
+        "score", or takes the score from score_attribute. Rules may nest up to
+        three levels, are location-only, must not be combined with node/score, and
+        are written through cibadmin because crmsh cannot express dates or nesting.
         A ticket constraint (type rsc_ticket, with "ticket" and optional "role" and
         "loss_policy") makes a resource depend on a cluster-wide ticket: the
         resource may only run while the ticket is granted to this site, and losing
@@ -2389,14 +2389,24 @@ components:
       type: object
       description: |
         A pacemaker rule attached to a location constraint. At least one of
-        expressions, date_spec or in_range is required, and the rule needs a score.
-      required: [score]
+        expressions, date_spec, in_range or rules is required, and the rule needs
+        either score or score_attribute (not both). Rules nest up to three levels
+        (RuleSpec -> RuleL2 -> RuleL3), which is how compound conditions are
+        expressed.
       properties:
         score:
           description: score awarded when the rule matches; a number, or inf/-inf
           oneOf:
             - type: integer
             - type: string
+        score_attribute:
+          type: string
+          description: take the score from this attribute instead of a fixed value
+        rules:
+          type: array
+          description: nested rules (second level at most)
+          items:
+            $ref: '#/components/schemas/RuleL2'
         boolean_op:
           type: string
           description: how the expressions combine; `and` or `or` (defaults to `or` when there is more than one term)
@@ -2408,6 +2418,63 @@ components:
         expressions:
           type: array
           description: attribute comparisons
+          items:
+            $ref: '#/components/schemas/RuleExpressionSpec'
+        date_spec:
+          $ref: '#/components/schemas/RuleDateSpec'
+        in_range:
+          $ref: '#/components/schemas/RuleInRange'
+
+    RuleL2:
+      type: object
+      description: Nested rule (second level); same shape as RuleSpec with one nesting level left.
+      properties:
+        score:
+          description: score awarded when the rule matches; a number, or inf/-inf
+          oneOf:
+            - type: integer
+            - type: string
+        score_attribute:
+          type: string
+        rules:
+          type: array
+          description: nested rules (third level)
+          items:
+            $ref: '#/components/schemas/RuleL3'
+        boolean_op:
+          type: string
+          enum: [and, or]
+        role:
+          type: string
+          enum: [Started, Stopped, Promoted, Unpromoted]
+        expressions:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuleExpressionSpec'
+        date_spec:
+          $ref: '#/components/schemas/RuleDateSpec'
+        in_range:
+          $ref: '#/components/schemas/RuleInRange'
+
+    RuleL3:
+      type: object
+      description: Deepest nested rule; it cannot nest further.
+      properties:
+        score:
+          description: score awarded when the rule matches; a number, or inf/-inf
+          oneOf:
+            - type: integer
+            - type: string
+        score_attribute:
+          type: string
+        boolean_op:
+          type: string
+          enum: [and, or]
+        role:
+          type: string
+          enum: [Started, Stopped, Promoted, Unpromoted]
+        expressions:
+          type: array
           items:
             $ref: '#/components/schemas/RuleExpressionSpec'
         date_spec:
@@ -2478,6 +2545,12 @@ components:
           type: string
         score_attribute:
           type: string
+        rules:
+          type: array
+          description: nested rules
+          items:
+            type: object
+            additionalProperties: true
         boolean_op:
           type: string
         role:

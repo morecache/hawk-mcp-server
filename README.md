@@ -146,6 +146,10 @@ Semantics worth knowing, all verified against crmsh on a live cluster:
   `crm_ticket -t <ticket> -g` first if the resource must keep running.
 * Deleting a group or clone through `resource_delete` keeps its members; only
   the group/clone element goes away.
+* Rules nest: a rule may contain `rules`, which is how compound conditions
+  (a group of AND/OR sub-expressions) are expressed; nesting is limited to three
+  levels. `score_attribute` takes the score from a node attribute instead of a
+  fixed `score` (exactly one of the two is required per rule).
 * A location constraint may carry a **rule** instead of node/score:
   `score` (a number, or `inf`/`-inf`) or `score_attribute` is required, exactly one of them; conditions are `expressions`
   (attribute comparisons such as `#uname eq node-3`, or `defined`/`not_defined`),
