@@ -1,0 +1,1126 @@
+openapi: 3.0.3
+
+info:
+  title: hawk-mcp
+  description: |
+    Cluster management API for the Hawk MCP server: read endpoints plus
+    confirmed write actions.
+
+    The "info" tool returns this metadata only; it does not read cluster
+    state. For live state use cluster_get, nodes_list or resources_list.
+
+    These endpoints are served by the hawk-apiserver `mcp-api` branch under
+    /api/mcp/v1 and are authenticated with a static bearer token. They are
+    JSON-only and are kept separate from the browser-facing /api/cib endpoints.
+
+    All responses are JSON objects. Errors are returned as
+    {"error":{"code":"...","message":"..."}} together with a matching HTTP
+    status code (401 for a missing/invalid token, 503 when the cluster is
+    stopped or still initializing).
+  version: 0.1.0
+
+servers:
+  - url: https://127.0.0.1:7630
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: cluster
+    description: Whole-cluster state
+  - name: nodes
+    description: Cluster member nodes
+  - name: resources
+    description: Cluster resources (primitives, clones, groups)
+  - name: actions-resource
+    description: Runtime actions on resources
+  - name: actions-node
+    description: Runtime actions on nodes
+
+paths:
+  /api/mcp/v1/cluster:
+    get:
+      operationId: cluster_get
+      tags: [cluster]
+      summary: Get a one-call summary of the cluster
+      description: |
+        Returns the cluster name, health status and summary line, the current
+        designated controller (DC), quorum state, CIB epoch, fencing state and
+        counts of nodes and resources, plus the names of any failed resources,
+        offline nodes, unclean nodes and nodes in maintenance mode (each of those
+        four lists is omitted when empty).
+
+        Use this first when you need to know whether the cluster is healthy.
+        A resource listed in failed_resources needs attention even if the
+        cluster as a whole is quorate.
+
+        If something failed or moved, call history_report_get (kind=log or
+        kind=events) for the cluster log, and resource_history_get for one
+        resource's operation records.
+
+        The epoch is formatted as admin_epoch:epoch:num_updates (for example 1:42:7); config_snapshot_get reports the bare epoch number.
+      responses:
+        '200':
+          description: Cluster summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/crm/status:
+    get:
+      operationId: crm_status_get
+      tags: [cluster]
+      summary: Get the parsed output of `crm status`
+      description: |
+        Returns every cluster node and every resource instance as reported by
+        crm_mon: per node whether it is online, in standby, in maintenance,
+        unclean or pending, whether it is the DC and how many resources it
+        runs; per resource its class, provider, type, canonical agent name
+        (class[:provider]:type), role, target role, whether it is active,
+        managed, failed, orphaned, blocked, on which nodes it runs, and which
+        clone it belongs to (if any).
+
+        Use this to inspect a specific node or resource in detail. For a quick
+        health check prefer cluster_get, whose output is much smaller.
+
+        If a node or resource has failed, follow up with history_report_get
+        (kind=log or kind=events) and resource_history_get for that resource.
+
+        Node attributes and utilization are only returned by nodes_list; this tool reports liveness and resource state.
+      responses:
+        '200':
+          description: Live node and resource state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrmStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/nodes:
+    get:
+      operationId: nodes_list
+      tags: [nodes]
+      summary: List cluster nodes with their attributes
+      description: |
+        Returns every configured cluster node merged with its live state:
+        name, id, online/standby/maintenance/unclean/pending flags, whether it
+        is the DC, how many resources it currently runs, its node type
+        (member or remote), plus the node attributes and utilization values
+        stored in the CIB.
+
+        Use this when you need node attributes (for example to check node
+        labels or capacity values) rather than just liveness.
+
+        Nodes that crm_mon reports but the CIB does not configure are appended as
+        well.
+      responses:
+        '200':
+          description: Node list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/resources:
+    get:
+      operationId: resources_list
+      tags: [resources]
+      summary: List cluster resources with parameters and live state
+      description: |
+        Returns every resource configured in the CIB merged with its live
+        state: id, resource agent class/provider/type, the agent name, current
+        role and target role, the node it runs on, managed/maintenance/failed/
+        orphaned/blocked flags, how many nodes it runs on and which ones, the
+        clone it belongs to (omitted for non-clone members), and the instance
+        parameters and meta attributes stored in the CIB.
+
+        Use this to inspect resource configuration and parameters. Note that
+        the derived flags (orphaned, blocked, failure_ignored) are omitted when
+        false, while active/managed/maintenance/failed are always present, and
+        that parameters appear as a flat name/value object.
+      responses:
+        '200':
+          description: Resource list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/resources/{id}/start:
+    post:
+      operationId: resource_start
+      tags: [actions-resource]
+      summary: Start a resource
+      description: |
+        Asks pacemaker to start the resource (`crm --force resource start <id>`).
+        Starting an already started resource is effectively a no-op.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (role/active/node of the resource).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resources/{id}/stop:
+    post:
+      operationId: resource_stop
+      tags: [actions-resource]
+      summary: Stop a resource
+      description: |
+        Asks pacemaker to stop the resource (`crm --force resource stop <id>`).
+        Stopping a fencing resource disables fencing while it is stopped.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        This is a destructive or disruptive action: it can stop workloads or
+        power-cycle a node. State the intent to the user before calling it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (role/active of the resource).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resources/{id}/cleanup:
+    post:
+      operationId: resource_cleanup
+      tags: [actions-resource]
+      summary: Clear a resource's failure history (not its placement constraint; see resource_clear)
+      description: |
+        Clears the failure history of the resource (`crm --force resource cleanup <id> [<node>]`).
+        Useful after fixing the cause of a failed resource: it drops the failcount and
+        allows the resource to run on a node again. It does not start or stop anything.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (failed flag of the resource).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resources/{id}/clear:
+    post:
+      operationId: resource_clear
+      tags: [actions-resource]
+      summary: Clear the placement constraint left by a move/migrate (not the failure history; see resource_cleanup)
+      description: |
+        Removes transient placement constraints, for example one left behind by an
+        earlier `crm resource move` (`crm --force resource clear <id>`), so the scheduler
+        is free to place the resource again.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (node of the resource).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resources/{id}/maintenance-on:
+    post:
+      operationId: resource_maintenance_on
+      tags: [actions-resource]
+      summary: Put a resource into maintenance mode
+      description: |
+        Puts the resource into maintenance mode (`crm --force resource maintenance <id>`):
+        pacemaker stops managing it, so no recovery action is taken if it fails.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        This is a destructive or disruptive action: it can stop workloads or
+        power-cycle a node. State the intent to the user before calling it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (maintenance flag of the resource).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resources/{id}/maintenance-off:
+    post:
+      operationId: resource_maintenance_off
+      tags: [actions-resource]
+      summary: Remove a resource from maintenance mode
+      description: |
+        Takes the resource out of maintenance mode (`crm --force resource maintenance <id> off`),
+        returning it to management by pacemaker.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (maintenance flag of the resource).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resources/{id}/migrate:
+    post:
+      operationId: resource_migrate
+      tags: [actions-resource]
+      summary: Move a resource to a specific node
+      description: |
+        Moves the resource to the node given in "destination"
+        (`crm --force resource migrate <id> <destination>`). This creates a placement
+        constraint, so the resource stays on that node until the constraint is cleared
+        with resource_clear.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        The request body must also carry the target node in "destination".
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (node of the resource).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resources/{id}/delete:
+    post:
+      operationId: resource_delete
+      tags: [actions-resource]
+      summary: Delete a resource from the CIB
+      description: |
+        Deletes the resource definition from the CIB (`crm --force configure delete <id>`).
+        The resource is stopped first if it is running. There is no undo.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        This is a destructive or disruptive action: it can stop workloads or
+        power-cycle a node. State the intent to the user before calling it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (resource no longer present in resources_list).
+
+        Deleting a group or clone removes only the container; its member resources stay configured.
+
+        It deletes any configuration object by id: a primitive, group, clone or constraint.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/nodes/{name}/standby-on:
+    post:
+      operationId: node_standby_on
+      tags: [actions-node]
+      summary: Put a node into standby
+      description: |
+        Puts the node into standby (`crm --force node standby <name>`): pacemaker moves
+        its resources away and does not schedule new ones on it. The node keeps running.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        This is a destructive or disruptive action: it can stop workloads or
+        power-cycle a node. State the intent to the user before calling it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (standby flag and resources_running of the node).
+
+        The node stays in standby until node_standby_off is called.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: node name
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/nodes/{name}/standby-off:
+    post:
+      operationId: node_standby_off
+      tags: [actions-node]
+      summary: Take a node out of standby
+      description: |
+        Brings the node back online (`crm --force node online <name>`), so pacemaker may
+        schedule resources on it again.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (standby flag of the node).
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: node name
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/nodes/{name}/maintenance-on:
+    post:
+      operationId: node_maintenance_on
+      tags: [actions-node]
+      summary: Put a node into maintenance mode
+      description: |
+        Puts the node into maintenance mode (`crm --force node maintenance <name>`):
+        resources on it are frozen in place and not recovered if they fail.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        This is a destructive or disruptive action: it can stop workloads or
+        power-cycle a node. State the intent to the user before calling it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (maintenance flag of the node).
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: node name
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/nodes/{name}/maintenance-off:
+    post:
+      operationId: node_maintenance_off
+      tags: [actions-node]
+      summary: Remove a node from maintenance mode
+      description: |
+        Takes the node out of maintenance mode (`crm --force node ready <name>`).
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (maintenance flag of the node).
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: node name
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/nodes/{name}/fence:
+    post:
+      operationId: node_fence
+      tags: [actions-node]
+      summary: Fence (power cycle) a node
+      description: |
+        Fences the node (`crm --force node fence <name>`), i.e. asks the fencing device
+        to power it off and back on. All guests on that node are terminated. Use it only
+        when the node is unreachable or must be reset; it is the most disruptive action
+        this API offers.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        This is a destructive or disruptive action: it can stop workloads or
+        power-cycle a node. State the intent to the user before calling it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (online flag of the node afterwards).
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: node name
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/nodes/{name}/clearstate:
+    post:
+      operationId: node_clearstate
+      tags: [actions-node]
+      summary: Clear a node state
+      description: |
+        Clears the node state (`crm --force node clearstate <name>`), for example a
+        stale UNCLEAN flag after a fence or a network failure, so that the node can
+        rejoin cleanly.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to preview the
+        exact crm command without running it.
+
+        After calling it, re-read the state with resources_list or crm_status_get
+        to confirm the effect (unclean flag of the node).
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: node name
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Static token read by hawk-apiserver from /etc/hawk/mcp.token. Send it as
+        "Authorization: Bearer <token>".
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ClusterUnavailable:
+      description: |
+        The cluster is stopped, still initializing, or pacemaker does not
+        report any cluster member.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    BadRequest:
+      description: The request body or path is invalid, for example a migrate without a destination
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ConfirmationRequired:
+      description: 'The request would change cluster state but did not carry {"confirm": true}'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    CommandFailed:
+      description: The underlying crm command failed; the payload carries the command line and stderr
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    ErrorEnvelope:
+      type: object
+      description: Standard error payload
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine readable error code
+              example: missing_token
+            message:
+              type: string
+              description: Human readable explanation
+            command:
+              type: array
+              description: Command line that failed (write actions only)
+              items:
+                type: string
+            stderr:
+              type: string
+              description: Captured stderr of the failed command (write actions only)
+    NameValue:
+      type: object
+      description: One name/value pair (node attribute, utilization entry or resource parameter)
+      required: [name, value]
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+
+    ClusterSummary:
+      type: object
+      description: One-call cluster health summary
+      required: [status, summary, node_count, nodes_online, resource_count]
+      properties:
+        cluster_name:
+          type: string
+          description: Value of the cluster-name CIB property (empty if unset)
+        status:
+          type: string
+          description: One of online, noquorum, nofencing or unclean; a stopped or unreachable cluster answers 503 cluster_unavailable instead
+        summary:
+          type: string
+          description: Human readable status line
+        dc:
+          type: string
+          description: Name of the current designated controller
+        have_quorum:
+          type: string
+          description: CIB have-quorum attribute ("1" or "0")
+        epoch:
+          type: string
+          description: CIB epoch
+        stack:
+          type: string
+          description: cluster-infrastructure property (for example corosync)
+        version:
+          type: string
+          description: dc-version property
+        fencing_enabled:
+          type: string
+          description: stonith-enabled property ("true" or "false")
+        node_count:
+          type: integer
+          description: Number of nodes reported by crm_mon
+        nodes_online:
+          type: integer
+          description: Number of nodes currently online
+        resource_count:
+          type: integer
+          description: Number of resource instances (clone members included)
+        failed_resources:
+          type: array
+          description: Resource ids currently marked failed
+          items:
+            type: string
+        offline_nodes:
+          type: array
+          description: Node names currently offline
+          items:
+            type: string
+        unclean_nodes:
+          type: array
+          description: Node names currently marked unclean
+          items:
+            type: string
+        maintenance_nodes:
+          type: array
+          description: Node names currently in maintenance mode
+          items:
+            type: string
+
+    Node:
+      type: object
+      description: Cluster node with live state and CIB attributes
+      required: [name, id, online]
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        online:
+          type: boolean
+        standby:
+          type: boolean
+        maintenance:
+          type: boolean
+        unclean:
+          type: boolean
+        pending:
+          type: boolean
+        is_dc:
+          type: boolean
+        resources_running:
+          type: integer
+        type:
+          type: string
+          description: Node type as reported by pacemaker (member or remote)
+        attributes:
+          type: array
+          description: Node attributes from the CIB (omitted when empty)
+          items:
+            $ref: '#/components/schemas/NameValue'
+        utilization:
+          type: array
+          description: Node utilization values from the CIB (omitted when empty)
+          items:
+            $ref: '#/components/schemas/NameValue'
+
+    NodeList:
+      type: object
+      required: [count]
+      properties:
+        items:
+          type: array
+          description: Nodes sorted by name
+          items:
+            $ref: '#/components/schemas/Node'
+        count:
+          type: integer
+
+    Resource:
+      type: object
+      description: Resource configuration merged with live state
+      required: [id, active, managed, maintenance, failed, nodes_running_on]
+      properties:
+        id:
+          type: string
+        class:
+          type: string
+          description: Resource agent class (ocf, stonith, systemd, ...)
+        provider:
+          type: string
+          description: Resource agent provider, for example heartbeat
+        type:
+          type: string
+          description: Resource agent type, for example IPaddr2
+        agent:
+          type: string
+          description: canonical resource agent name, class[:provider]:type (for example ocf:heartbeat:Dummy)
+        role:
+          type: string
+          description: Current role as reported by crm_mon (Started, Stopped, Master, Slave)
+        target_role:
+          type: string
+          description: Target role, when one is configured
+        node:
+          type: string
+          description: Node the resource currently runs on (first one for multi-node clones)
+        active:
+          type: boolean
+        managed:
+          type: boolean
+        maintenance:
+          type: boolean
+        failed:
+          type: boolean
+        failure_ignored:
+          type: boolean
+        orphaned:
+          type: boolean
+        blocked:
+          type: boolean
+        nodes_running_on:
+          type: integer
+        running_on:
+          type: array
+          description: Names of nodes the resource currently runs on
+          items:
+            type: string
+        clone:
+          type: string
+          description: Id of the clone this resource is a member of (omitted otherwise)
+        params:
+          type: object
+          description: Instance parameters from the CIB as a flat name/value object
+          additionalProperties:
+            type: string
+        meta:
+          type: object
+          description: Meta attributes from the CIB as a flat name/value object
+          additionalProperties:
+            type: string
+
+    ResourceList:
+      type: object
+      required: [count]
+      properties:
+        items:
+          type: array
+          description: Resources sorted by id
+          items:
+            $ref: '#/components/schemas/Resource'
+        count:
+          type: integer
+
+    CrmStatus:
+      type: object
+      description: Parsed `crm status` output
+      required: [nodes, resources]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Node'
+        resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Resource'
+
+    WriteOptions:
+      type: object
+      description: |
+        Request body of every write action. "confirm" is mandatory: without it the
+        request is rejected with 409, so a mutation cannot happen by accident.
+      required: [confirm]
+      properties:
+        confirm:
+          type: boolean
+          description: Must be true. Confirms that the caller intends to change cluster state.
+        dry_run:
+          type: boolean
+          description: |
+            When true, return the crm command that would run without executing it.
+            Use it to check what an action would do before confirming it.
+          default: false
+        destination:
+          type: string
+          description: |
+            Target node for actions that need one: resource_migrate (required) and
+            resource_cleanup (optional; omit to clean up on all nodes).
+
+    CommandResult:
+      type: object
+      description: Result of a write action
+      required: [action, subject, command, executed]
+      properties:
+        action:
+          type: string
+          description: '<subject kind>_<action>, for example resource_start or node_standby_on'
+        subject:
+          type: string
+          description: Resource id or node name the action was applied to
+        command:
+          type: array
+          description: Exact argv that was (or, for a dry run, would be) executed
+          items:
+            type: string
+        dry_run:
+          type: boolean
+        executed:
+          type: boolean
+          description: false for a dry run, true when the command actually ran
+        message:
+          type: string
+        stdout:
+          type: string
+          description: Captured crm stdout, when non-empty
+        stderr:
+          type: string
+          description: Captured crm stderr, when non-empty

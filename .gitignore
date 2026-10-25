@@ -1,0 +1,8 @@
+# editor/OS temp files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# local build output
+/hawk-mcp-server
