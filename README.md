@@ -46,6 +46,27 @@ To change a tool, update `openapi.yaml` and, for a new endpoint, the matching
 handler in hawk-apiserver; then update the table below and rebuild both
 repositories.
 
+## Checking the contract
+
+`openapi.yaml` and the apiserver handlers are maintained by hand in two
+repositories. With both checked out:
+
+```sh
+./scripts/check-contract.sh --apiserver PATH/TO/hawk-apiserver-src
+```
+
+`--apiserver` is the hawk-apiserver **source checkout** (the directory that
+contains `main.go`), not the built binary.
+
+The script compares the `/api/mcp/v1` paths and operationIds in `openapi.yaml`
+with the route registrations in the apiserver's `main.go`, including the
+`resources/`, `nodes/` and `tickets/` prefix routes. It reports paths that exist
+on one side only and exits non-zero on a mismatch. By default it prints a short
+explanation and a table with one row per path; `--quiet` prints only the summary,
+which is useful in CI. This is a static check: it compares the source route table
+and the spec, not the running server's tools/list. It is a bash script (no Python
+or YAML library needed) and does not start the server or contact the cluster.
+
 ## Prerequisites
 
 1. A running pacemaker/corosync cluster. When the cluster is stopped or still
