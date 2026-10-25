@@ -1427,6 +1427,63 @@ paths:
           $ref: '#/components/responses/NotFound'
         '503':
           $ref: '#/components/responses/ClusterUnavailable'
+  /api/mcp/v1/history-report:
+    get:
+      operationId: history_report_get
+      tags: [cluster]
+      summary: Get a textual cluster history report from crmsh
+      description: |
+        Use this to investigate a failure: it returns a curated, cross-node
+        report from `crm history <kind> [<object>]` - the log summary (kind log),
+        resource and node events, the transition list, recorded events or the
+        latest news. It is not a raw per-node journal; for raw journal lines read
+        `journalctl -u pacemaker -u corosync` on the node itself. The structured
+        per-resource counterpart is resource_history_get.
+
+        `crm report` collects logs from every node, so a call takes about ten
+        seconds and can be slower on a busy cluster; the tool gives up after two
+        minutes. Output is stripped of ANSI colour codes,
+        truncated to `limit` lines (default 200, maximum 2000) and capped at 512
+        KiB; truncated=true tells you that the text was cut, and total_lines tells
+        you how much there was.
+
+        kind=resource and kind=node require "object" (resource id or node name);
+        the other kinds take no object.
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          description: log, resource, node, transitions, events or latest
+          schema:
+            type: string
+            enum: [log, resource, node, transitions, events, latest]
+        - name: object
+          in: query
+          required: false
+          description: resource id (kind=resource) or node name (kind=node)
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: maximum number of lines to return (default 200, maximum 2000)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: History report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryReport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
 components:
   securitySchemes:
     bearerAuth:
@@ -1478,6 +1535,12 @@ components:
             $ref: '#/components/schemas/ErrorEnvelope'
     Conflict:
       description: The request needs confirmation, or the object already exists
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    GatewayTimeout:
+      description: The crm history command did not finish within the timeout
       content:
         application/json:
           schema:
@@ -2590,3 +2653,32 @@ components:
           type: object
           additionalProperties:
             type: string
+
+    HistoryReport:
+      type: object
+      description: Textual output of crm history
+      required: [kind, command, exit_code, duration_seconds, total_lines, returned_lines, truncated, text]
+      properties:
+        kind:
+          type: string
+        object:
+          type: string
+        command:
+          type: array
+          description: exact argv that was executed
+          items:
+            type: string
+        exit_code:
+          type: integer
+        duration_seconds:
+          type: integer
+        total_lines:
+          type: integer
+          description: number of lines the command produced before truncation
+        returned_lines:
+          type: integer
+        truncated:
+          type: boolean
+        text:
+          type: string
+          description: ANSI-stripped output, truncated to limit lines and 512 KiB

@@ -193,6 +193,18 @@ operations. Typical exit codes:
 0 ok, 2 invalid parameter, 6 not configured, 7 not running, 124/125 timeout, 190/191 degraded,
 126/127 the agent could not be executed.
 
+### Textual history reports
+
+| tool | runs | notes |
+|---|---|---|
+| `history_report_get` | `crm history <kind> [<object>]` | human-readable narrative: raw log view, resource events, node events, transition list, events or latest news |
+
+`crm history` collects logs from every node through `crm report`, so one call
+takes about ten seconds. Output is stripped of ANSI colour codes and truncated
+to `limit` lines (default 200) and 512 KiB; `truncated` and `total_lines` tell
+you how much was cut. Use `resource_history_get` when you want structured
+per-resource operation records instead of prose.
+
 ### Hand-written tools
 
 These exist because auto-generated tools cannot combine several API responses
