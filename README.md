@@ -126,7 +126,7 @@ re-creating would drop the resource history and its placement.
 | `resource_group_member_add` / `resource_group_member_remove` | `crm configure modgroup <group> add\|remove <resource>` | the supported way to change membership; removing a resource leaves it configured |
 | `resource_clones_list` | `GET /api/mcp/v1/resource-clones` | lists clones and the resource they wrap |
 | `resource_clone_create` | `crm configure clone <id> <resource\|group> [meta k=v ...]` | create-only; the child cannot be changed in place, and deleting a clone keeps the child |
-| `resource_constraints_list` / `resource_constraint_create` | `crm configure location\|colocation\|order ...` | create-only; `type` selects the form and the required fields |
+| `resource_constraints_list` / `resource_constraint_create` | `crm configure location\|colocation\|order ...` (rule-based locations use `cibadmin --modify`) | create-only; `type` selects the form and the required fields; a location may carry a rule instead of node/score |
 
 Semantics worth knowing, all verified against crmsh on a live cluster:
 
@@ -140,6 +140,17 @@ Semantics worth knowing, all verified against crmsh on a live cluster:
   group members are included in the list instead of silently missing.
 * Deleting a group or clone through `resource_delete` keeps its members; only
   the group/clone element goes away.
+* A location constraint may carry a **rule** instead of node/score:
+  `score` (a number, or `inf`/`-inf`) or `score_attribute` is required, exactly one of them; conditions are `expressions`
+  (attribute comparisons such as `#uname eq node-3`, or `defined`/`not_defined`),
+  `date_spec` (recurring window with `hours`, `weekdays`, `months`, ...) and
+  `in_range` (`start`/`end`), combined by `boolean_op` (default `or`).
+  Rules apply to location constraints only, and `node`/`score` must not be
+  combined with a rule. Rule-based locations are written with
+  `cibadmin --modify --xpath //constraints`, because crmsh has no grammar for
+  date expressions and `cibadmin --create` rejects even schema-valid fragments
+  on this pacemaker version. Unknown rule fields (for example `days` instead of
+  `weekdays`) are rejected instead of silently ignored.
 
 ### Resource operations and cluster defaults
 
