@@ -91,6 +91,8 @@ executing it.
 | tool | runs | notes |
 |---|---|---|
 | `resource_start` / `resource_stop` | `crm --force resource start/stop <id>` | stopping a fencing resource disables fencing while it is stopped |
+| `resource_restart` | `crm --force resource restart <id>` | stop then start one resource |
+| `ticket_grant` / `ticket_revoke` | `crm_ticket -t <name> -g\|-r --force` | revoking a ticket triggers the rsc_ticket loss policy, which can stop resources |
 | `resource_cleanup` | `crm --force resource cleanup <id> [<node>]` | clears the failure history so the resource may run again |
 | `resource_clear` | `crm --force resource clear <id>` | removes a placement constraint left by `migrate`/`move` |
 | `resource_migrate` | `crm --force resource migrate <id> <destination>` | needs `destination`; the move is sticky until `resource_clear` |
@@ -210,6 +212,8 @@ operations. Typical exit codes:
 | `fence_history_get` | `stonith_admin -H <node>` | tell a real fence from a crash or a manual reboot |
 | `config_snapshot_get` | `crm configure show` | snapshot the configuration before a batch of changes |
 | `config_verify` | `crm configure verify` (crm_verify) | validate the CIB after editing |
+| `remote_node_preflight` | DNS lookup + TCP dial to 3121 + CIB/status check | before creating a remote resource: does the host resolve, is the executor port reachable, is a remote primitive already configured, is the node connected |
+| `tickets_list` | `crm_ticket --info --output-as=xml` | which tickets are granted, plus standby and last-granted timestamps |
 
 ### Textual history reports
 

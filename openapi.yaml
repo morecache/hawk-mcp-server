@@ -41,6 +41,8 @@ tags:
     description: Runtime actions on resources
   - name: actions-node
     description: Runtime actions on nodes
+  - name: tickets
+    description: Cluster tickets and their state
   - name: config
     description: Configuration-level reads and writes that change CIB definitions
   - name: discovery
@@ -878,6 +880,8 @@ paths:
         an error; the response reports updated=false and says there was nothing to do.
 
         Requires {"confirm": true}; add {"dry_run": true} to preview the command.
+
+        A change usually takes effect on the next start; call resource_restart to apply it now.
       requestBody:
         required: true
         content:
@@ -1297,6 +1301,8 @@ paths:
         primitives have operations; groups and clones inherit them from members.
 
         Requires {"confirm": true}; add {"dry_run": true} to preview.
+
+        Interval and timeout changes apply to subsequent operations; restart the resource with resource_restart to re-schedule them.
       requestBody:
         required: true
         content:
@@ -1680,6 +1686,194 @@ paths:
                 $ref: '#/components/schemas/ConfigVerify'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /api/mcp/v1/remote-node-preflight:
+    get:
+      operationId: remote_node_preflight
+      tags: [discovery]
+      summary: Check whether a host can become a pacemaker remote node
+      description: |
+        Read-only preflight for adding a remote node. It resolves the hostname,
+        tries a TCP connection to the remote executor port (3121 by default) from
+        the node that runs this API, checks whether a remote primitive for that
+        host is already configured, and reports whether the remote node is
+        currently connected.
+
+        Use it before creating an ocf:pacemaker:remote resource: ready=true means
+        the host is reachable and no remote primitive exists yet. The host side
+        still needs the pacemaker-remote package, the cluster authkey and a
+        running pacemaker_remote service - this API cannot do that part.
+      parameters:
+        - name: host
+          in: query
+          required: true
+          description: hostname of the remote node (as it should appear in the cluster)
+          schema:
+            type: string
+        - name: port
+          in: query
+          required: false
+          description: remote executor port (default 3121)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Preflight result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteNodePreflight'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/mcp/v1/tickets:
+    get:
+      operationId: tickets_list
+      tags: [discovery]
+      summary: List cluster tickets and their state
+      description: |
+        Returns the cluster tickets (crm_ticket --info): each ticket's status,
+        whether it is granted to this site, whether it is on standby and when it
+        was last granted. Use it to understand the effect of rsc_ticket
+        constraints, which only allow their resources to run while the ticket is
+        granted.
+      responses:
+        '200':
+          description: Ticket list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/tickets/{name}/grant:
+    post:
+      operationId: ticket_grant
+      tags: [tickets]
+      summary: Grant a ticket to this cluster site
+      description: |
+        Grants the ticket to this site (`crm_ticket -t <name> -g --force`), which
+        lets resources with an rsc_ticket constraint on it run here. The --force is
+        required because crm_ticket cannot know whether another site already
+        granted the ticket.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview the command.
+        Other sites running with the same ticket must be checked by the operator.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: ticket id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/tickets/{name}/revoke:
+    post:
+      operationId: ticket_revoke
+      tags: [tickets]
+      summary: Revoke a ticket from this cluster site
+      description: |
+        Revokes the ticket from this site (`crm_ticket -t <name> -r --force`).
+        Resources with an rsc_ticket constraint on the ticket are then handled by
+        the constraint's loss policy (stop by default, demote for promotable
+        resources), so revoking can stop resources.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview the command.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: ticket id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+
+  /api/mcp/v1/resources/{id}/restart:
+    post:
+      operationId: resource_restart
+      tags: [actions-resource]
+      summary: Restart a resource
+      description: |
+        Restarts the resource (`crm --force resource restart <id>`): pacemaker
+        orders a stop followed by a start. Use it after changing parameters or to
+        recover a resource without touching the rest of the cluster.
+
+        Requires {"confirm": true} in the request body. Add {"dry_run": true} to
+        preview the exact crm command without running it. Re-read the state with
+        resources_list or crm_status_get to confirm the resource came back.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: resource id
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteOptions'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConfirmationRequired'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
 components:
   securitySchemes:
     bearerAuth:
@@ -3015,3 +3209,92 @@ components:
           type: string
         duration_seconds:
           type: integer
+
+    RemoteNodeCheck:
+      type: object
+      required: [name, ok]
+      properties:
+        name:
+          type: string
+        ok:
+          type: boolean
+        detail:
+          type: string
+
+    RemoteNodePreflight:
+      type: object
+      required: [host, port, reachable, connected, ready, checks]
+      properties:
+        host:
+          type: string
+        port:
+          type: integer
+        resolved:
+          type: array
+          items:
+            type: string
+        reachable:
+          type: boolean
+        latency_ms:
+          type: integer
+        existing_primitive:
+          type: string
+          description: id of the remote primitive already configured for this host
+        node_name:
+          type: string
+          description: remote node name (primitive id or remote-node meta attribute)
+        connected:
+          type: boolean
+        ready:
+          type: boolean
+          description: true when the host is reachable and no remote primitive exists
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/RemoteNodeCheck'
+
+    Ticket:
+      type: object
+      required: [name, granted, standby]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          description: granted, revoked or standby
+        granted:
+          type: boolean
+        standby:
+          type: boolean
+        last_granted:
+          type: string
+
+    TicketList:
+      type: object
+      required: [items, count]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ticket'
+        count:
+          type: integer
+
+    TicketResult:
+      type: object
+      required: [action, subject, command, executed, dry_run, message]
+      properties:
+        action:
+          type: string
+        subject:
+          type: string
+        command:
+          type: array
+          items:
+            type: string
+        executed:
+          type: boolean
+        dry_run:
+          type: boolean
+        message:
+          type: string
