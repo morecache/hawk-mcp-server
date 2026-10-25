@@ -151,7 +151,8 @@ paths:
         role and target role, the node it runs on, managed/maintenance/failed/
         orphaned/blocked flags, how many nodes it runs on and which ones, the
         clone it belongs to (omitted for non-clone members), and the instance
-        parameters and meta attributes stored in the CIB.
+        parameters and meta attributes stored in the CIB. The group field is
+        set when the resource is a member of a group.
 
         Use this to inspect resource configuration and parameters. Note that
         the derived flags (orphaned, blocked, failure_ignored) are omitted when
@@ -973,6 +974,276 @@ paths:
           $ref: '#/components/responses/CommandFailed'
         '503':
           $ref: '#/components/responses/ClusterUnavailable'
+  /api/mcp/v1/resource-groups:
+    get:
+      operationId: resource_groups_list
+      tags: [config]
+      summary: List resource groups
+      description: |
+        Returns every resource group with its ordered member list and meta
+        attributes. A group that is wrapped by a clone reports that clone in
+        "clone". Use it after resource_group_create or the member tools to
+        verify the result, and before deleting a group.
+      responses:
+        '200':
+          description: Group list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+    post:
+      operationId: resource_group_create
+      tags: [config]
+      summary: Create a resource group
+      description: |
+        Creates a group with the given ordered members
+        (`crm configure group <id> <member> ... [meta k=v ...]`).
+
+        Groups are create-only: crmsh refuses to create an id that already
+        exists, so an existing id is answered with 409 already_exists and
+        nothing changes. Change membership with resource_group_member_add and
+        resource_group_member_remove, and meta attributes through
+        resource_parameter_set with meta=true.
+
+        Every member must be a configured primitive that is not already inside
+        another group or clone, and the member order is the start order.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceGroupCreate'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/resource-group-members/add:
+    post:
+      operationId: resource_group_member_add
+      tags: [config]
+      summary: Add a resource to an existing group
+      description: |
+        Adds one primitive to a group (`crm configure modgroup <group> add <resource>`).
+        This is the supported way to change group membership; re-creating the group
+        is refused by crmsh.
+
+        The resource must exist and must not be inside another group or clone
+        (409 already_contained otherwise), and the group must exist (404).
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceGroupMember'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/resource-group-members/remove:
+    post:
+      operationId: resource_group_member_remove
+      tags: [config]
+      summary: Remove a resource from an existing group
+      description: |
+        Removes one primitive from a group
+        (`crm configure modgroup <group> remove <resource>`). The primitive stays
+        configured; it just becomes a top-level resource again. Removing a resource
+        that is not a member of the group is answered with 409 not_a_member, and
+        removing the last member is rejected with 400 - a group needs at least one
+        member, so delete the group instead.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceGroupMember'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/resource-clones:
+    get:
+      operationId: resource_clones_list
+      tags: [config]
+      summary: List clones
+      description: |
+        Returns every clone with the resource (or group) it wraps and its meta
+        attributes. Clones are also visible on the wrapped resources through the
+        "clone" field of resources_list.
+      responses:
+        '200':
+          description: Clone list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloneList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+    post:
+      operationId: resource_clone_create
+      tags: [config]
+      summary: Create a clone around a resource or group
+      description: |
+        Creates a clone (`crm configure clone <id> <resource|group> [meta k=v ...]`).
+
+        Clones are create-only: an existing id is answered with 409 already_exists.
+        The child cannot be changed in place; delete the clone with resource_delete
+        and create it again if you need a different child. Deleting a clone keeps
+        the child resource.
+
+        The child must exist and must not already be inside another group or clone.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceCloneCreate'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+
+  /api/mcp/v1/resource-constraints:
+    get:
+      operationId: resource_constraints_list
+      tags: [config]
+      summary: List location, colocation and order constraints
+      description: |
+        Returns every constraint with its type and attributes. Location constraints
+        report resource, node and score; colocation constraints report resource,
+        with_resource and score; order constraints report first, then, their
+        actions and the kind. Use it to verify constraint creation and to see what
+        has to be removed before moving resources.
+      responses:
+        '200':
+          description: Constraint list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConstraintList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
+    post:
+      operationId: resource_constraint_create
+      tags: [config]
+      summary: Create a location, colocation or order constraint
+      description: |
+        Creates one constraint:
+
+          location    crm configure location <id> <resource> <score>: <node>
+          colocation  crm configure colocation <id> <score>: <resource> <with_resource>
+          order       crm configure order <id> [<kind>:] <first> <then>
+
+        "type" selects the form and the required fields follow from it: location
+        needs resource and node, colocation needs resource and with_resource, order
+        needs first and then. "kind" is only used by order and must be Mandatory,
+        Optional or Serialize (default Mandatory). "score" defaults to 100 when omitted; an explicit 0 is passed through unchanged (for location, 0 means no preference; a rule with score -inf forbids a node).
+
+        Constraints are create-only: an existing id is answered with 409
+        already_exists. A constraint target must be a top-level primitive, a group
+        or a clone; a resource inside a group cannot carry a constraint directly
+        because crmsh would treat it as ambiguous, so target the group instead.
+        Location targets must be known cluster nodes.
+
+        Requires {"confirm": true}; add {"dry_run": true} to preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceConstraintCreate'
+      responses:
+        '200':
+          description: Configuration result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/CommandFailed'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -1226,6 +1497,9 @@ components:
         clone:
           type: string
           description: Id of the clone this resource is a member of (omitted otherwise)
+        group:
+          type: string
+          description: Id of the group this resource is a member of (omitted otherwise)
         params:
           type: object
           description: Instance parameters from the CIB as a flat name/value object
@@ -1491,3 +1765,221 @@ components:
         stderr:
           type: string
           description: captured crm stderr, when non-empty
+
+    GroupInfo:
+      type: object
+      description: One resource group
+      required: [id, members]
+      properties:
+        id:
+          type: string
+        members:
+          type: array
+          description: member primitives in start order
+          items:
+            type: string
+        meta:
+          type: object
+          description: meta attributes of the group
+          additionalProperties:
+            type: string
+        clone:
+          type: string
+          description: id of the clone that wraps this group, when there is one
+
+    GroupList:
+      type: object
+      required: [count]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/GroupInfo'
+        count:
+          type: integer
+
+    ResourceGroupCreate:
+      type: object
+      required: [id, members, confirm]
+      properties:
+        id:
+          type: string
+          description: group id; must not be used by any other object
+        members:
+          type: array
+          description: primitive ids in start order; each must be a top-level primitive
+          items:
+            type: string
+        meta:
+          type: object
+          description: optional meta attributes
+          additionalProperties:
+            type: string
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the crm command without executing it
+          default: false
+
+    ResourceGroupMember:
+      type: object
+      required: [group, resource, confirm]
+      properties:
+        group:
+          type: string
+          description: existing group id
+        resource:
+          type: string
+          description: primitive id to add or remove
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the crm command without executing it
+          default: false
+
+    CloneInfo:
+      type: object
+      description: One clone
+      required: [id]
+      properties:
+        id:
+          type: string
+        resource:
+          type: string
+          description: id of the wrapped primitive (or of the first primitive of the wrapped group)
+        group:
+          type: string
+          description: id of the wrapped group, when the clone wraps a group
+        meta:
+          type: object
+          description: meta attributes of the clone
+          additionalProperties:
+            type: string
+
+    CloneList:
+      type: object
+      required: [count]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CloneInfo'
+        count:
+          type: integer
+
+    ResourceCloneCreate:
+      type: object
+      required: [id, resource, confirm]
+      properties:
+        id:
+          type: string
+          description: clone id; must not be used by any other object
+        resource:
+          type: string
+          description: primitive or group id to wrap; must not be inside another container
+        meta:
+          type: object
+          description: optional meta attributes, for example clone-max or clone-node-max
+          additionalProperties:
+            type: string
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the crm command without executing it
+          default: false
+
+    ConstraintInfo:
+      type: object
+      description: One constraint
+      required: [id, type]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          description: location, colocation or order
+        resource:
+          type: string
+          description: subject resource (location and colocation)
+        node:
+          type: string
+          description: target node (location)
+        with_resource:
+          type: string
+          description: second resource (colocation)
+        score:
+          type: string
+          description: constraint score as reported by the CIB; a string, and it can be INFINITY for a -inf rule
+        first:
+          type: string
+          description: first resource (order)
+        first_action:
+          type: string
+          description: first action (order)
+        then:
+          type: string
+          description: second resource (order)
+        then_action:
+          type: string
+          description: second action (order)
+        kind:
+          type: string
+          description: Mandatory, Optional or Serialize (order)
+
+    ConstraintList:
+      type: object
+      required: [count]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstraintInfo'
+        count:
+          type: integer
+
+    ResourceConstraintCreate:
+      type: object
+      required: [id, type, confirm]
+      properties:
+        id:
+          type: string
+          description: constraint id; must not be used by any other object
+        type:
+          type: string
+          description: location, colocation or order
+          enum: [location, colocation, order]
+        resource:
+          type: string
+          description: subject resource; required for location and colocation
+        node:
+          type: string
+          description: target node; required for location
+        score:
+          type: integer
+          description: score, defaults to 100 when omitted; an explicit 0 is passed through unchanged; 0 means no preference (a rule with score -inf forbids a node). The constraint list returns scores as strings
+        with_resource:
+          type: string
+          description: second resource; required for colocation
+        first:
+          type: string
+          description: first resource; required for order
+        then:
+          type: string
+          description: second resource; required for order
+        kind:
+          type: string
+          description: order kind; Mandatory, Optional or Serialize (default Mandatory)
+          enum: [Mandatory, Optional, Serialize]
+        confirm:
+          type: boolean
+          description: must be true; without it the request is rejected with 409
+        dry_run:
+          type: boolean
+          description: return the crm command without executing it
+          default: false

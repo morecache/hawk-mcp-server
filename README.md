@@ -117,6 +117,30 @@ confirm/dry-run contract as the actions above.
 re-creating it.** `crm configure primitive` refuses to touch an existing id, and
 re-creating would drop the resource history and its placement.
 
+### Groups, clones and constraints
+
+| tool | runs | notes |
+|---|---|---|
+| `resource_groups_list` | `GET /api/mcp/v1/resource-groups` | lists groups, their members and meta attributes |
+| `resource_group_create` | `crm configure group <id> <members...> [meta k=v ...]` | create-only; members must be top-level primitives and their order is the start order |
+| `resource_group_member_add` / `resource_group_member_remove` | `crm configure modgroup <group> add\|remove <resource>` | the supported way to change membership; removing a resource leaves it configured |
+| `resource_clones_list` | `GET /api/mcp/v1/resource-clones` | lists clones and the resource they wrap |
+| `resource_clone_create` | `crm configure clone <id> <resource\|group> [meta k=v ...]` | create-only; the child cannot be changed in place, and deleting a clone keeps the child |
+| `resource_constraints_list` / `resource_constraint_create` | `crm configure location\|colocation\|order ...` | create-only; `type` selects the form and the required fields |
+
+Semantics worth knowing, all verified against crmsh on a live cluster:
+
+* Every configuration object is **create-only**. An existing id is answered with
+  409 `already_exists`; "replace" means delete and create again.
+* A constraint target must be a top-level primitive, a group or a clone. A
+  resource inside a group cannot carry a constraint directly (crmsh calls it
+  ambiguous), so target the group instead; the API rejects the member case with
+  a hint that names the container.
+* `resources_list` reports the containing `group` as well as `clone`, and
+  group members are included in the list instead of silently missing.
+* Deleting a group or clone through `resource_delete` keeps its members; only
+  the group/clone element goes away.
+
 ### Hand-written tools
 
 These exist because auto-generated tools cannot combine several API responses
@@ -166,10 +190,9 @@ curl -sS -X POST http://127.0.0.1:9000/mcp \
   API offers"; the other state-changing tools describe their effect individually
   (stopping a resource, moving resources off a node, freezing a node's resources,
   and so on). Mention the intent to the user before calling any of them.
-* **Not exposed yet:** resource groups, clones, colocation/order/location
-  constraints and resource operations (op parameters). The read side does not
-  report group membership either, so adding writes without reads would be
-  unverifiable; that is the next slice.
+* **Not exposed yet:** resource operation parameters (op actions such as
+  `monitor interval=10s` or `start timeout=60s`), remote and bundle resources,
+  and the cluster-wide properties (`crm configure property`).
 * Resource parameters are passed to crmsh as a single argv token, so values
   containing double quotes or line breaks are rejected rather than escaped.
 * In stdio mode, route the library's stdout chatter away (`./hawk-mcp-server ...
