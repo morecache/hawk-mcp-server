@@ -134,21 +134,23 @@ type resourceExplainArgs struct {
 // so every collection is initialised to an empty value and no nested struct is
 // returned.
 type resourceExplainResult struct {
-	Found       bool     `json:"found"`
-	ID          string   `json:"id"`
-	Agent       string   `json:"agent"`
-	Role        string   `json:"role"`
-	TargetRole  string   `json:"target_role"`
-	Node        string   `json:"node"`
-	Clone       string   `json:"clone"`
-	Managed     bool     `json:"managed"`
-	Maintenance bool     `json:"maintenance"`
-	Failed      bool     `json:"failed"`
-	Orphaned    bool     `json:"orphaned"`
-	Blocked     bool     `json:"blocked"`
-	Summary     string   `json:"summary"`
-	Hints       []string `json:"hints"`
-	KnownIDs    []string `json:"known_ids"`
+	Found        bool     `json:"found"`
+	ID           string   `json:"id"`
+	Agent        string   `json:"agent"`
+	Role         string   `json:"role"`
+	TargetRole   string   `json:"target_role"`
+	Node         string   `json:"node"`
+	Clone        string   `json:"clone"`
+	Managed      bool     `json:"managed"`
+	Maintenance  bool     `json:"maintenance"`
+	Failed       bool     `json:"failed"`
+	Orphaned     bool     `json:"orphaned"`
+	Blocked      bool     `json:"blocked"`
+	Summary      string   `json:"summary"`
+	LastFailure  string   `json:"last_failure,omitempty"`
+	FailureCount int      `json:"failure_count"`
+	Hints        []string `json:"hints"`
+	KnownIDs     []string `json:"known_ids"`
 }
 
 // resourceExplain answers "why is this resource in this state, and what do I do
@@ -244,9 +246,65 @@ func (c *hawkClient) resourceExplain(ctx context.Context, _ *mcp.CallToolRequest
 	if found.Active && found.Role == "Started" && found.Node == "" {
 		hints = append(hints, "the resource reports role=Started but no node; the cluster view is inconsistent, check crm_status_get")
 	}
+	// Recent operation history: the latest failed operation is usually the most
+	// useful single fact when a resource misbehaves.
+	history, err := c.resourceHistory(ctx, found.ID)
+	if err == nil {
+		result.FailureCount = history.failures
+		if history.lastFailure != "" {
+			result.LastFailure = history.lastFailure
+			hints = append(hints, "last recorded failure: "+history.lastFailure)
+		}
+	}
 	result.Hints = hints
 
 	return nil, result, nil
+}
+
+// resourceHistory summarises the operation history of one resource.
+type historySummary struct {
+	failures    int
+	lastFailure string
+}
+
+func (c *hawkClient) resourceHistory(ctx context.Context, resource string) (historySummary, error) {
+	var payload struct {
+		Ops []struct {
+			Status string `json:"status"`
+		} `json:"ops"`
+		LastFailure *struct {
+			Operation    string `json:"operation"`
+			Node         string `json:"node"`
+			RCCode       string `json:"rc_code"`
+			RCText       string `json:"rc_text"`
+			LastRCChange string `json:"last_rc_change"`
+			Interval     string `json:"interval"`
+		} `json:"last_failure"`
+	}
+
+	path := "/api/mcp/v1/resource-history?resource=" + url.QueryEscape(resource) + "&limit=500"
+	if err := c.do(ctx, http.MethodGet, path, nil, &payload); err != nil {
+		return historySummary{}, err
+	}
+
+	summary := historySummary{}
+	for _, op := range payload.Ops {
+		if op.Status == "failed" {
+			summary.failures++
+		}
+	}
+	if payload.LastFailure != nil {
+		lf := payload.LastFailure
+		detail := fmt.Sprintf("%s on %s rc=%s (%s)", lf.Operation, lf.Node, lf.RCCode, lf.RCText)
+		if lf.Interval != "" && lf.Interval != "0" && lf.Interval != "0s" {
+			detail += " interval=" + lf.Interval
+		}
+		if lf.LastRCChange != "" {
+			detail += " at " + lf.LastRCChange
+		}
+		summary.lastFailure = detail
+	}
+	return summary, nil
 }
 
 func formatFlatMap(m map[string]string) string {

@@ -1364,6 +1364,51 @@ paths:
           $ref: '#/components/responses/CommandFailed'
         '503':
           $ref: '#/components/responses/ClusterUnavailable'
+  /api/mcp/v1/resource-history:
+    get:
+      operationId: resource_history_get
+      tags: [resources]
+      summary: Get the recorded operation history of one resource
+      description: |
+        Returns the operations pacemaker recorded for the resource, newest first,
+        with the node, exit code, exit-code text, execution time and the time the
+        status last changed. This is the structured data behind "why did this
+        resource fail": a failed start or monitor shows up with a non-zero rc_code,
+        and last_failure repeats the most recent such entry.
+
+        Use it after a failure before deciding to clean up, restart or ignore the
+        resource; rc_code 7 means the resource is not running, 2 means a parameter
+        was rejected, and 124/125 mean a timeout; 190/191 mean degraded but
+        still running. "limit" caps the number of
+        entries (default 50; values above 500 are clamped).
+      parameters:
+        - name: resource
+          in: query
+          required: true
+          description: resource id, for example stonith-sbd
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: maximum number of entries to return (default 50, maximum 500)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Operation history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceHistory'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ClusterUnavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -2233,3 +2278,67 @@ components:
           type: boolean
           description: return the command without executing it
           default: false
+
+    HistoryOp:
+      type: object
+      description: One recorded operation of a resource
+      required: [node, operation, rc_code, rc_text, status]
+      properties:
+        node:
+          type: string
+          description: node the operation ran on
+        operation:
+          type: string
+          description: operation name, for example start, stop or monitor
+        interval:
+          type: string
+          description: interval as stored in the CIB, for example 10s or 10000
+        rc_code:
+          type: string
+          description: exit code as recorded by pacemaker
+        rc_text:
+          type: string
+          description: human readable meaning of rc_code, for example not running
+        status:
+          type: string
+          description: ok (rc 0), not_running (rc 7, the normal answer for a probe on a node that must not run the resource) or failed
+        op_status:
+          type: string
+          description: raw op-status attribute when present
+        exec_time:
+          type: string
+          description: raw exec-time attribute in milliseconds, for example 3588
+        last_rc_change:
+          type: string
+          description: epoch timestamp of the last status change
+        last_run:
+          type: string
+          description: epoch timestamp of the last run
+        call_id:
+          type: string
+        exit_reason:
+          type: string
+        operation_key:
+          type: string
+
+    ResourceHistory:
+      type: object
+      description: Operation history of one resource
+      required: [resource, limit, count, ops]
+      properties:
+        resource:
+          type: string
+        limit:
+          type: integer
+        count:
+          type: integer
+        ops:
+          type: array
+          description: recorded operations, newest first
+          items:
+            $ref: '#/components/schemas/HistoryOp'
+        last_failure:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/HistoryOp'
+          description: the most recent operation with status failed, or null when the resource has no failures recorded

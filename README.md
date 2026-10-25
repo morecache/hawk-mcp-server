@@ -160,6 +160,18 @@ Some values have consequences the API cannot check: `stonith-enabled=false`
 disables fencing, and defaults such as `resource-stickiness` or
 `migration-threshold` change how the scheduler behaves cluster-wide.
 
+### Resource history
+
+| tool | reads | notes |
+|---|---|---|
+| `resource_history_get` | CIB `<status>` `lrm_rsc_op` entries | operations newest first, with node, rc code and its meaning, exec time and the time the status last changed; `last_failure` repeats the latest failed one |
+
+`resource_explain` reads the same data, so its answer carries `last_failure` and
+`failure_count` next to the flags; it covers the most recent 500 recorded
+operations. Typical exit codes:
+0 ok, 2 invalid parameter, 6 not configured, 7 not running, 124/125 timeout, 190/191 degraded,
+126/127 the agent could not be executed.
+
 ### Hand-written tools
 
 These exist because auto-generated tools cannot combine several API responses
@@ -210,7 +222,8 @@ curl -sS -X POST http://127.0.0.1:9000/mcp \
   (stopping a resource, moving resources off a node, freezing a node's resources,
   and so on). Mention the intent to the user before calling any of them.
 * **Not exposed yet:** remote and bundle resources, ticket constraints, rule
-  expressions (time/date-based constraints) and resource history (`crm history`).
+  expressions (time/date-based constraints), and the textual `crm history`
+  report (the API exposes the recorded operations themselves, not the narrative).
 * Resource parameters are passed to crmsh as a single argv token, so values
   containing double quotes or line breaks are rejected rather than escaped.
 * In stdio mode, route the library's stdout chatter away (`./hawk-mcp-server ...
