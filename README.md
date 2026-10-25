@@ -148,6 +148,10 @@ Semantics worth knowing, all verified against crmsh on a live cluster:
   location constraints may target it. The remote host itself must run
   `pacemaker_remoted` with the same `/etc/pacemaker/authkey` as the cluster -
   that setup is outside this API, which only runs cluster-level commands.
+  Creating such a primitive enforces the `remote_node_preflight` checks:
+  an unreachable host or a host that already has a remote primitive is refused
+  with `remote_host_unreachable` / `remote_already_configured` (dry_run skips
+  the checks).
 * A `rsc_ticket` constraint makes a resource depend on a ticket (`ticket`, with
   optional `role` and `loss_policy` stop/demote/fence/freeze). The resource only
   runs while the ticket is granted to this site, so creating one against an
@@ -212,7 +216,7 @@ operations. Typical exit codes:
 | `fence_history_get` | `stonith_admin -H <node>` | tell a real fence from a crash or a manual reboot |
 | `config_snapshot_get` | `crm configure show` | snapshot the configuration before a batch of changes |
 | `config_verify` | `crm configure verify` (crm_verify) | validate the CIB after editing |
-| `remote_node_preflight` | DNS lookup + TCP dial to 3121 + CIB/status check | before creating a remote resource: does the host resolve, is the executor port reachable, is a remote primitive already configured, is the node connected |
+| `remote_node_preflight` | DNS lookup + TCP dial to 3121 + CIB/status check | before creating a remote resource: does the host resolve, is the executor port reachable, is a remote primitive already configured, is the node connected; resource_create enforces the same checks |
 | `tickets_list` | `crm_ticket --info --output-as=xml` | which tickets are granted, plus standby and last-granted timestamps |
 
 ### Textual history reports

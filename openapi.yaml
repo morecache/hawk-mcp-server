@@ -832,6 +832,12 @@ paths:
         double quotes or line breaks, and an unknown agent is rejected with 400
         before the CIB is modified.
 
+        For a remote node use agent `ocf:pacemaker:remote` with
+        `params: {server: <host>}`; the primitive id (or `remote-node` meta) becomes
+        the node name. Such a create runs remote_node_preflight's checks and is
+        refused with remote_already_configured or remote_host_unreachable; dry_run
+        skips those checks. Use resource_agents_list to find agent names of other types.
+
         Requires {"confirm": true}. Add {"dry_run": true} to get the exact command
         without changing the CIB.
       requestBody:
@@ -1240,18 +1246,16 @@ paths:
         "score", or takes the score from score_attribute. Rules may nest up to
         three levels, are location-only, must not be combined with node/score, and
         are written through cibadmin because crmsh cannot express dates or nesting.
-        For a location constraint, "node" must be a cluster member or a connected
-        remote node (nodes_list reports remote nodes with type=remote). The remote
-        node comes from a resource of agent ocf:pacemaker:remote: its resource id
-        (or its remote-node meta attribute) is the node name to use here.
+        Remote nodes are valid location targets: use the remote primitive id (or
+        its remote-node meta attribute), which nodes_list reports with type=remote.
 
-        A ticket constraint (type rsc_ticket, with "ticket" and optional "role" and
-        "loss_policy") makes a resource depend on a cluster-wide ticket: the
-        resource may only run while the ticket is granted to this site, and losing
-        the ticket applies the loss policy (stop, demote, fence or freeze; the
-        default is stop, or demote for promotable resources). Creating one against
-        a ticket that is not granted therefore stops the resource - grant the ticket
-        with crm_ticket first, or expect the resource to stop.
+        A ticket constraint (rsc_ticket) makes the resource depend on a cluster-wide
+        ticket: it may run only while the ticket is granted here, and losing it
+        applies loss_policy (stop, demote, fence or freeze; default stop, or demote
+        for promotable resources). rsc_ticket accepts only resource, ticket, role
+        and loss_policy; it rejects score/node/with_resource/first/then, and the
+        resource must already exist (404 unknown_resource). Check tickets_list
+        first and grant the ticket with ticket_grant, or expect the resource to stop.
 
         Requires {"confirm": true}; add {"dry_run": true} to preview.
       requestBody:
@@ -1702,6 +1706,11 @@ paths:
         the host is reachable and no remote primitive exists yet. The host side
         still needs the pacemaker-remote package, the cluster authkey and a
         running pacemaker_remote service - this API cannot do that part.
+
+        resource_create performs the same checks for ocf:pacemaker:remote and
+        refuses such a create when they fail (remote_already_configured,
+        remote_host_unreachable), so calling this tool is optional but shows the
+        details before you commit to the create.
       parameters:
         - name: host
           in: query
